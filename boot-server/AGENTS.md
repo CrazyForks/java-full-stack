@@ -79,14 +79,16 @@ boot-server/
 - 能变化的配置值和稳定不变的契约值不可混用：配置绑定类只保存配置，领域类型只保存领域不变量，路由注解只声明接口，测试辅助方法只负责根据绑定配置生成外部地址。
 - DTO 的 Bean Validation 注解及其局部边界数值、正则和提示语必须就近保留；即使多个 DTO 使用相同规则，也不为此创建校验常量类。Controller 与 Security 路径、单测 fixture/request/assertion、SQL 表名/列名及 `schema.sql` 种子业务码均可保留字面量；它们不得成为生产契约的第二份定义。字符串重复不是抽常量条件，只有跨模块共享、可配置或承载机器协议，且集中后能明确所有权与演进一致性的值才集中。
 
-静态审计至少覆盖以下类别：
+静态审计仅在本次改动涉及配置值、错误码、权限码、存储键时执行，至少覆盖：
 
 ```bash
-rg -n --glob '*.java' --glob '*.yml' --glob '*.yaml' --glob '*.properties' "/api|servlet.path|timeout|ttl|TOKEN|SECRET|BOOT_|Authorization|Bearer |40000|40100|40300|40400|40900|50000|user:manage|ADMIN|USER|status|deleted|page|size" boot-server
+rg -n --glob '*.java' --glob '*.yml' --glob '*.yaml' --glob '*.properties' "/api|servlet.path|timeout|ttl|TOKEN|SECRET|BOOT_|Authorization|Bearer " boot-server
 rg -n --glob '*.java' 'static final|@RequestMapping|@GetMapping|@PostMapping|@PutMapping|@DeleteMapping' boot-server
 ```
 
-审计报告必须说明：运行时配置从哪一份配置源读取；稳定常量由哪个职责类型拥有；哪些字面量因映射注解、Security 内部路径、DDL/种子数据、协议固定字段或单测试数据而保留；以及配置前缀变化是否有测试证据。
+改动涉及错误码或权限码时，另扫对应数字与码值（如 `40000|40100|40300|40400|40900|50000|user:manage`）。
+
+审计结论并入对应卡片的完成记录，说明：运行时配置从哪一份配置源读取；稳定常量由哪个职责类型拥有；哪些字面量因映射注解、Security 内部路径、DDL/种子数据、协议固定字段或单测试数据而保留；以及配置前缀变化是否有测试证据。不单独成文。
 
 错误码约定：
 

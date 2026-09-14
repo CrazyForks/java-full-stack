@@ -4,11 +4,11 @@
 
 ## 规则入口
 
-**规则不在本文件定义，只在下列文件定义一次。** 执行任务前按场景先读：
+**规则不在本文件定义，只在下列文件定义一次。** 改动仓库内容前按场景先读（问答、查询类任务无需预读规则文件）：
 
 | 场景 | 先读 |
 |-|-|
-| 一切任务 | [AGENTS.md](AGENTS.md)：权威来源、单卡闭环、全局红线、Git 工作流 |
+| 改动仓库内容（代码/文档/配置） | [AGENTS.md](AGENTS.md)：权威来源、单卡闭环、全局红线、Git 工作流 |
 | 当前该做什么 | [实践计划与进度](docs/10-实战产品蓝图/实践计划/README.md)：进度与当前卡片的唯一来源 |
 | 改文档 | [docs/AGENTS.md](docs/AGENTS.md)：模板、写作规则、链接审计 |
 | 改后端 | [boot-server/AGENTS.md](boot-server/AGENTS.md)：分层、命名、Web、SQL、事务、编码约定 |
@@ -22,7 +22,7 @@
 |-|-|
 | Java | 25（LTS）——唯一前置要求，任何机器自装（Temurin/Corretto 均可） |
 | Spring Boot | 4.0.0（BOM import 管理） |
-| MyBatis-Plus | 3.5.17（Boot4 专用 starter；**3.5.9+ `ServiceImpl` 在 `spring.service.impl` 包**） |
+| MyBatis-Plus | 3.5.17（Boot4 专用 starter；`ServiceImpl` 包路径以实测为准） |
 | H2 | BOM 托管；数据落 `boot-server/data/`（前期学习免安装，后期可切 MySQL） |
 | Maven | 3.9.16（仓库自带 Maven Wrapper；无需全局安装） |
 | Lombok | 1.18.42（父 pom 的 annotationProcessorPaths 已配） |
