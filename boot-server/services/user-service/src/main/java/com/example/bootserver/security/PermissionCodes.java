@@ -5,6 +5,8 @@ public final class PermissionCodes {
 
     public static final String USER_MANAGEMENT = "user:manage";
 
+    public static final String PRODUCT_MANAGEMENT = "product:manage";
+
     private PermissionCodes() {
     }
 }

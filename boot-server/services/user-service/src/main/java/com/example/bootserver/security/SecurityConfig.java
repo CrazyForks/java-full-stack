@@ -1,5 +1,6 @@
 package com.example.bootserver.security;
 
+import org.springframework.http.HttpMethod;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -37,8 +38,11 @@ public class SecurityConfig {
                         .permitAll()
                         // 个人身份自查只需合法登录；放在 /users/** 前，避免被管理规则覆盖。
                         .requestMatchers("/users/me").authenticated()
-                        // 商品浏览属于 C 端已登录读取，不要求后台用户管理权限。
-                        .requestMatchers("/products", "/products/**").authenticated()
+                        // 写接口先匹配管理员权限，再开放已登录用户的商品浏览。
+                        .requestMatchers(HttpMethod.POST, "/products").hasAuthority(PermissionCodes.PRODUCT_MANAGEMENT)
+                        .requestMatchers(HttpMethod.PUT, "/products/*/status", "/skus/*/price")
+                        .hasAuthority(PermissionCodes.PRODUCT_MANAGEMENT)
+                        .requestMatchers(HttpMethod.GET, "/products", "/products/**").authenticated()
                         // 用户资源属于后台管理面：创建、查询、更新、删除都必须具备稳定权限码。
                         .requestMatchers("/users/**").hasAuthority(PermissionCodes.USER_MANAGEMENT)
                         .anyRequest().authenticated())

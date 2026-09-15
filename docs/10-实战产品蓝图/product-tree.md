@@ -51,6 +51,8 @@ boot-server/
         │   ├── SecurityConfig.java 【安全过滤链与路由规则】
         │   │   ├── /auth/**、OpenAPI、H2 Console 公开；/users/me 需要有效 JWT；
         │   │   │   其余 /users/** 需要 user:manage 权限。
+        │   │   ├── 商品 GET 只需有效 JWT；商品创建、上下架与 SKU 改价需要
+        │   │   │   product:manage 权限。
         │   │   ├── STATELESS：服务端不保存 HttpSession，每次请求携带 Bearer Token。
         │   │   └── 技术：SecurityFilterChain、路径授权、最小权限、CSRF 适用边界。
         │   │
@@ -159,7 +161,7 @@ boot-server/
         │   ├── ApiPrefixIntegrationTests.java 【API 前缀、OpenAPI、Swagger UI】
         │   └── BootServerApplicationTests.java 【应用与数据库初始化】
         │
-        └── 商品域 【✅ M2-00 数据模型与 M2-01 只读查询源码已落地】
+        └── 商品域 【✅ M2-00 数据模型、M2-01 查询与 M2-02 管理源码已落地】
             ├── entity/Product.java / Sku.java 【商品状态、BigDecimal 价格、逻辑删除、version 映射】
             ├── mapper/ProductMapper.java / SkuMapper.java 【BaseMapper 单表数据访问】
             ├── db/schema.sql 的 t_product、t_sku 【状态与价格约束、SKU 唯一编码、外键、幂等种子】
@@ -167,5 +169,11 @@ boot-server/
             ├── service/ProductQueryService.java 【上架过滤、稳定分页、商品与 SKU 详情聚合】
             ├── controller/ProductController.java 与 dto/Product*Response、SkuResponse
             │   └── GET /products、GET /products/{id} 仅认证读取，响应字段白名单。
-            └── controller/ProductQueryIntegrationTests.java 【真实 HTTP：401、分页、详情、404 与参数校验】
+            ├── service/ProductManagementService.java 【事务创建商品和 SKU、上/下架、按版本改价】
+            ├── controller/ProductController.java / SkuController.java 与管理请求、响应 DTO
+            │   └── POST /products、PUT /products/{id}/status、PUT /skus/{id}/price
+            │       要求 product:manage；改价返回新版本。
+            ├── config/MybatisPlusConfig.java 【SKU 的 @Version 乐观锁插件与分页插件】
+            ├── controller/ProductQueryIntegrationTests.java 【真实 HTTP：401、分页、详情、404 与参数校验】
+            └── controller/ProductManagementIntegrationTests.java 【真实 HTTP：403、事务回滚、上下架与并发 409】
 ```

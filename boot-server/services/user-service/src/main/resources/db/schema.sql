@@ -95,11 +95,26 @@ INSERT INTO t_permission (code, name)
 SELECT 'user:manage', '管理用户'
 WHERE NOT EXISTS (SELECT 1 FROM t_permission WHERE code = 'user:manage');
 
+INSERT INTO t_permission (code, name)
+SELECT 'product:manage', '管理商品'
+WHERE NOT EXISTS (SELECT 1 FROM t_permission WHERE code = 'product:manage');
+
 -- 用业务编码查询关联主键，避免脚本依赖自增 ID；ADMIN 具备后续后台用户管理所需的最小权限。
 INSERT INTO t_role_permission (role_id, permission_id)
 SELECT role.id, permission.id
 FROM t_role role
 JOIN t_permission permission ON permission.code = 'user:manage'
+WHERE role.code = 'ADMIN'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM t_role_permission relation
+      WHERE relation.role_id = role.id AND relation.permission_id = permission.id
+  );
+
+INSERT INTO t_role_permission (role_id, permission_id)
+SELECT role.id, permission.id
+FROM t_role role
+JOIN t_permission permission ON permission.code = 'product:manage'
 WHERE role.code = 'ADMIN'
   AND NOT EXISTS (
       SELECT 1
