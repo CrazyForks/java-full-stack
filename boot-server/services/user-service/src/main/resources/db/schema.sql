@@ -4,6 +4,7 @@
 --   1. CREATE TABLE IF NOT EXISTS —— 重复执行不报错
 --   2. 初始数据仅在「表为空」时插入（NOT EXISTS 守卫）——
 --      之后你的增删改全部保留，重启不会把实验数据重置回初始状态
+--   3. 商品域种子按稳定业务键逐条守卫，不覆盖已有商品或 SKU
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS t_user (
@@ -105,3 +106,61 @@ WHERE role.code = 'ADMIN'
       FROM t_role_permission relation
       WHERE relation.role_id = role.id AND relation.permission_id = permission.id
   );
+
+-- 商品状态由数据库约束兜底；逻辑删除不改变原记录的业务身份。
+CREATE TABLE IF NOT EXISTS t_product (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name        VARCHAR(128) NOT NULL,
+    description VARCHAR(1024) NULL,
+    status      VARCHAR(16) NOT NULL DEFAULT 'DRAFT',
+    deleted     TINYINT NOT NULL DEFAULT 0,
+    create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ck_product_status CHECK (status IN ('DRAFT', 'ON_SALE', 'OFF_SALE')),
+    CONSTRAINT ck_product_deleted CHECK (deleted IN (0, 1))
+);
+
+-- 外键默认 RESTRICT：商品仍有 SKU 时禁止物理删除；sku_code 不包含 deleted，删除后也不能复用。
+CREATE TABLE IF NOT EXISTS t_sku (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    product_id  BIGINT NOT NULL,
+    sku_code    VARCHAR(64) NOT NULL,
+    price       DECIMAL(19, 2) NOT NULL,
+    version     INT NOT NULL DEFAULT 0,
+    deleted     TINYINT NOT NULL DEFAULT 0,
+    create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_sku_product FOREIGN KEY (product_id) REFERENCES t_product (id),
+    CONSTRAINT uk_sku_code UNIQUE (sku_code),
+    CONSTRAINT ck_sku_price CHECK (price >= 0),
+    CONSTRAINT ck_sku_version CHECK (version >= 0),
+    CONSTRAINT ck_sku_deleted CHECK (deleted IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_sku_product_id ON t_sku (product_id);
+
+INSERT INTO t_product (name, description, status)
+SELECT 'BootMall 入门手册', '用于验证商品与 SKU 数据模型', 'ON_SALE'
+WHERE NOT EXISTS (SELECT 1 FROM t_product WHERE name = 'BootMall 入门手册');
+
+INSERT INTO t_product (name, description, status)
+SELECT 'BootMall 练习本', '用于验证多规格 SKU', 'ON_SALE'
+WHERE NOT EXISTS (SELECT 1 FROM t_product WHERE name = 'BootMall 练习本');
+
+INSERT INTO t_sku (product_id, sku_code, price)
+SELECT product.id, 'BOOTMALL-BOOK-STD', 29.90
+FROM t_product product
+WHERE product.id = (SELECT MIN(id) FROM t_product WHERE name = 'BootMall 入门手册')
+  AND NOT EXISTS (SELECT 1 FROM t_sku WHERE sku_code = 'BOOTMALL-BOOK-STD');
+
+INSERT INTO t_sku (product_id, sku_code, price)
+SELECT product.id, 'BOOTMALL-NOTE-A5', 9.90
+FROM t_product product
+WHERE product.id = (SELECT MIN(id) FROM t_product WHERE name = 'BootMall 练习本')
+  AND NOT EXISTS (SELECT 1 FROM t_sku WHERE sku_code = 'BOOTMALL-NOTE-A5');
+
+INSERT INTO t_sku (product_id, sku_code, price)
+SELECT product.id, 'BOOTMALL-NOTE-A4', 12.90
+FROM t_product product
+WHERE product.id = (SELECT MIN(id) FROM t_product WHERE name = 'BootMall 练习本')
+  AND NOT EXISTS (SELECT 1 FROM t_sku WHERE sku_code = 'BOOTMALL-NOTE-A4');

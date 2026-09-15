@@ -136,8 +136,9 @@ boot-server/
         │   │   ├── 端口、/api 前缀、H2 数据源、JWT TTL、逻辑删除、SQL 日志。
         │   │   └── JWT_SECRET_BASE64、BOOT_ADMIN_USERNAME、BOOT_ADMIN_PASSWORD 等敏感值
         │   │       只由环境变量注入，仓库不保存真实密钥和密码。
-        │   └── db/schema.sql 【幂等 DDL 与 RBAC 种子数据】
-        │       ├── 已实现 t_user、t_role、t_permission、t_user_role、t_role_permission。
+        │   └── db/schema.sql 【幂等 DDL 与 RBAC、商品域种子数据】
+        │       ├── 已实现 t_user、t_role、t_permission、t_user_role、t_role_permission、
+        │       │   t_product、t_sku。
         │       ├── CREATE TABLE IF NOT EXISTS 与按业务键守卫的 INSERT，使脚本重跑不覆盖学习数据。
         │       └── 技术：H2、MySQL 兼容模式、DDL、唯一约束、外键、幂等种子数据、
         │           逻辑删除、RBAC 多对多模型。
@@ -158,10 +159,9 @@ boot-server/
         │   ├── ApiPrefixIntegrationTests.java 【API 前缀、OpenAPI、Swagger UI】
         │   └── BootServerApplicationTests.java 【应用与数据库初始化】
         │
-        └── 商品域 【⬜ 尚未实现：对应已解锁的 M2-00】
-            ├── entity/Product.java / Sku.java 【尚未创建】
-            ├── mapper/ProductMapper.java / SkuMapper.java 【尚未创建】
-            └── db/schema.sql 的 t_product、t_sku 【尚未创建】
-                └── 后续会学习：DECIMAL 与 BigDecimal、SKU 唯一编码、外键、乐观锁 version、
-                    商品状态约束、幂等种子数据与数据库不变量测试。
+        └── 商品域 【✅ M2-00 数据模型源码已落地】
+            ├── entity/Product.java / Sku.java 【商品状态、BigDecimal 价格、逻辑删除、version 映射】
+            ├── mapper/ProductMapper.java / SkuMapper.java 【BaseMapper 单表数据访问】
+            ├── db/schema.sql 的 t_product、t_sku 【状态与价格约束、SKU 唯一编码、外键、幂等种子】
+            └── mapper/ProductSkuMapperIntegrationTests.java 【H2 数据不变量与 Mapper 集成验证】
 ```

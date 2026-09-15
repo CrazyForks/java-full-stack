@@ -46,8 +46,13 @@
 
 ## 完成记录
 
-日期：
+日期：2026-09-15
 
-提交：
+提交：`feat: 建立商品与 SKU 数据模型`（用户已要求提交）。
 
 测试与接口证据：
+
+- `schema.sql` 幂等新增 `t_product`、`t_sku` 和按商品名称 / `sku_code` 守卫的种子数据；商品状态、SKU 金额、编码唯一性与商品外键均由数据库约束兜底。Mapper 使用 MyBatis-Plus 逻辑删除映射，金额使用 `BigDecimal`。
+- `ProductSkuMapperIntegrationTests` 4 项通过：Mapper 可查到 2 个种子商品与 3 个关联 SKU；重跑 schema 不重复插入且保留学习数据；必填、状态、价格、外键、默认值和已逻辑删除 SKU 编码不可复用均经过 H2 实测。
+- JDK 25.0.4.1 下执行 `boot-server/mvnw.cmd -pl services/user-service -am test`：56 项测试，0 失败、0 错误，`BUILD SUCCESS`。本机 Unix domain socket 的连接故障会阻止 Tomcat 启动；该次验收通过仅在本次进程设置 `JAVA_TOOL_OPTIONS=-javaagent:<临时 TCP 管道回退 agent>`，未修改全局 Java/Maven 配置。故障定位和复现做法已另存全局记忆。
+- 本卡无商品 HTTP 接口；真实验证入口是 Mapper 集成测试和数据库约束测试。`git diff --check` 通过。
