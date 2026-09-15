@@ -37,6 +37,8 @@ public class SecurityConfig {
                         .permitAll()
                         // 个人身份自查只需合法登录；放在 /users/** 前，避免被管理规则覆盖。
                         .requestMatchers("/users/me").authenticated()
+                        // 商品浏览属于 C 端已登录读取，不要求后台用户管理权限。
+                        .requestMatchers("/products", "/products/**").authenticated()
                         // 用户资源属于后台管理面：创建、查询、更新、删除都必须具备稳定权限码。
                         .requestMatchers("/users/**").hasAuthority(PermissionCodes.USER_MANAGEMENT)
                         .anyRequest().authenticated())

@@ -159,9 +159,13 @@ boot-server/
         │   ├── ApiPrefixIntegrationTests.java 【API 前缀、OpenAPI、Swagger UI】
         │   └── BootServerApplicationTests.java 【应用与数据库初始化】
         │
-        └── 商品域 【✅ M2-00 数据模型源码已落地】
+        └── 商品域 【✅ M2-00 数据模型与 M2-01 只读查询源码已落地】
             ├── entity/Product.java / Sku.java 【商品状态、BigDecimal 价格、逻辑删除、version 映射】
             ├── mapper/ProductMapper.java / SkuMapper.java 【BaseMapper 单表数据访问】
             ├── db/schema.sql 的 t_product、t_sku 【状态与价格约束、SKU 唯一编码、外键、幂等种子】
-            └── mapper/ProductSkuMapperIntegrationTests.java 【H2 数据不变量与 Mapper 集成验证】
+            ├── mapper/ProductSkuMapperIntegrationTests.java 【H2 数据不变量与 Mapper 集成验证】
+            ├── service/ProductQueryService.java 【上架过滤、稳定分页、商品与 SKU 详情聚合】
+            ├── controller/ProductController.java 与 dto/Product*Response、SkuResponse
+            │   └── GET /products、GET /products/{id} 仅认证读取，响应字段白名单。
+            └── controller/ProductQueryIntegrationTests.java 【真实 HTTP：401、分页、详情、404 与参数校验】
 ```
