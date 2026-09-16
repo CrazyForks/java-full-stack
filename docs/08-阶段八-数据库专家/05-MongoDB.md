@@ -55,7 +55,7 @@ public class UserStore {
 > - `getDatabase("shop").getCollection("users")`：定位到「数据库.集合」（≈ 库.表）。
 > - `new Document("name", name).append("age", age)`：**文档即 JSON**——字段灵活，不用预先定义 schema。
 > - `insertOne(doc)`：插入一条；`find(...).first()`：查第一条；`find(...)` 返回游标可遍历。
-> - **`_id` 自动生成**：若不指定，服务端会生成 ObjectId 作为 `_id`。当前 ObjectId 是 12 字节：4 字节时间戳、5 字节随机值、3 字节递增计数器；它通常按生成时间递增，但不是严格的全局时间顺序，也不应把可读时间当业务排序依据。[官方 BSON 类型文档](https://www.mongodb.com/docs/manual/reference/bson-types/#objectid)
+> - **`_id` 自动生成**：若不指定，Java Driver 会在发送前生成 ObjectId 作为 `_id`。当前 ObjectId 是 12 字节：4 字节时间戳、5 字节随机值、3 字节递增计数器；它通常按生成时间递增，但不是严格的全局时间顺序，也不应把可读时间当业务排序依据。[官方 BSON 类型文档](https://www.mongodb.com/docs/manual/reference/bson-types/#objectid)
 > - 对比 MySQL：**无需先建表**，插入第一条文档就自动建了集合——这是 schema-less 的魅力。
 
 ## 核心概念
@@ -66,10 +66,10 @@ public class UserStore {
 | 结构 | JSON 文档，字段灵活 | 表，强 schema |
 | 关联 | 文档内嵌或引用 | JOIN |
 | 事务 | 单文档原子；支持多文档事务 | ACID 事务与复杂关联是常见强项 |
-| 扩展 | 分片，水平扩展容易 | 主从/分库分表 |
+| 扩展 | 需要时可用分片扩展，仍要设计分片键与路由 | 主从/分库分表 |
 > **该怎么做**：字段常变、一对一内嵌、海量写入用 MongoDB。
 > **不该怎么做**：复杂多表关联、强事务（如支付）用 MongoDB——那是 MySQL 的地盘。
-> **小知识**：文档底层不是纯 JSON 文本，而是 **BSON（Binary JSON，类比：把 JSON 文本打包成带"类型标签"的二进制快递件——体积更小、取用更快）**——二进制编码，多了日期、二进制、Decimal128 等原生类型，存储更紧凑、解析更快。平时写 `Document` 不用关心它，但"文档即 JSON"只是观感，落盘与传输其实是 BSON。
+> **小知识**：文档底层不是纯 JSON 文本，而是 **BSON（Binary JSON）**——一种带类型的二进制编码，支持日期、二进制、Decimal128 等原生类型。它是否比 JSON 文本更小或更快取决于字段名、值与访问方式；不要因“二进制”就把它当作压缩格式。平时写 `Document` 不用关心编码细节，但“文档即 JSON”只是开发体验，驱动传输的是 BSON。
 
 两种建模方式，一图对照：
 
@@ -77,7 +77,7 @@ public class UserStore {
 flowchart LR
     subgraph Mongo["MongoDB：文档内嵌或引用，schema 灵活"]
         M1["users 集合：一条文档 等于 一个用户<br/>字段可不同、免建表"]
-        M2["订单内嵌进用户文档<br/>一次查询拿全，无需 JOIN"]
+        M2["地址/少量设置可内嵌进订单或用户<br/>多订单放 orders，以 userId 引用"]
     end
     subgraph MySQL["MySQL：关系表加 JOIN，强 schema"]
         S1["users 表：先建表、列固定"]
@@ -224,39 +224,56 @@ try (var session = mongoClient.startSession()) {   // 用注入的 mongoClient �
 > MongoDB 建文档时最核心的决策：**数据是内嵌（embedded）还是引用（reference）**，取决于「访问模式 + 数据规模」。
 
 > **类比：内嵌 vs 引用怎么想**——生活版：内嵌像把证件照直接贴在身份证内页，随身带、一次翻开全都有（但补办得换整本）；引用像家谱只需写「第 5 代亲属详情见户口本」，人多就单独维护一本册子，改一处不用重抄整本。
-> 换成文档模型：**内嵌**= 把「订单地址」直接写进订单文档，一次查询拿全、读得爽；**引用**= 订单只存「用户 id」，用户各自成文档、独立更新，不会把单文档顶到 16MB 上限。
+> 换成文档模型：**内嵌**= 把「订单地址」直接写进订单文档，一次查询拿全、读得爽；**引用**= 订单只存 `userId`，用户和订单各自成文档、独立增长，不会把单文档顶到 **16 MiB** 上限。
 
 | 决策 | 该怎么做 | 原由 |
 |-|-|-|
 | **内嵌（Embed）** | 一对一 / 一对少（如订单内含几个地址、文章含标签数组） | 一次查询拿全，避免跨文档查询 |
-| **引用（Reference）** | 一对多 / 多对多（如用户的多条订单、关注关系） | 避免重复、数据独立更新、控制文档大小（16MB 上限） |
+| **引用（Reference）** | 一对多 / 多对多（如用户的多条订单、关注关系） | 避免重复、数据独立更新、控制文档大小（16 MiB 上限） |
 
-```javascript
+```java
+// import org.bson.Document; import java.util.List; （示例省略其余 import）
+// 假设 orders 是 MongoCollection<Document>，userId 是当前用户的稳定标识
 // 内嵌: 订单里直接嵌收货地址(一对少)
 Document order = new Document("orderNo", "A001")
     .append("items", List.of(/* ... */))
     .append("addr", new Document("city", "上海").append("street", "xx路"));
 
-// 引用: 用户的多条订单(一对多) —— 订单单独存, 用户只存订单 id 引用
-Document user = new Document("name", "张三").append("orderIds", List.of("O1", "O2"));
+// 引用: 订单独立增长；不要把所有 orderId 反向累计在 user 文档
+Document storedOrder = order.append("userId", userId);
+orders.insertOne(storedOrder);
+// 应用启动或迁移时一次性建立索引，不在每次下单时重复执行：
+orders.createIndex(new Document("userId", 1).append("created_at", -1));
+// 查询用户最近订单：orders.find(new Document("userId", userId)).sort(new Document("created_at", -1)).limit(20);
 ```
-> **该怎么做**：内嵌用于「随主文档一起读、变化少」的数据；引用用于「独立增长、需单独更新」的数据。
-> **不该怎么做**：把用户的所有订单都内嵌进用户文档——随订单增长会顶到 16MB 文档上限，且更新整个文档代价大。
+> **该怎么做**：内嵌用于「随主文档一起读、变化少且有上界」的数据；引用用于「独立增长、需单独更新」的数据。用户订单列表应以 `orders.userId` 为主查询入口，并建立与排序匹配的索引。
+> **不该怎么做**：把用户的所有订单或无限增长的 `orderIds` 数组放进用户文档——二者都会随订单增长逼近 16 MiB 上限，也会放大文档更新与迁移成本。[MongoDB：内嵌与引用](https://www.mongodb.com/docs/manual/data-modeling/concepts/embedding-vs-references/) / [MongoDB：文档大小限制](https://www.mongodb.com/docs/manual/reference/limits/#bson-documents)
 
 ## 场景与红线（怎么做 / 不该怎么做）
 
 | 场景 | ✅ 该怎么做 | ❌ 不该怎么做 |
 |-|-|-|
-| 埋点/事件/日志 | MongoDB（字段灵活，海量写入） | 每次 ALTER 加列的 MySQL |
+| 埋点/事件原文 | 先声明事实源与保留期；字段灵活、按文档查询时可选 MongoDB | 未声明来源与留存，就只把数据塞进某个库 |
+| 全文日志/检索 | ES 作为可重建索引；原始事实可在 MongoDB、对象存储或日志平台 | 把 ES 当唯一日志事实源，无法重建时才发现没有原文 |
 | 动态字段/灵活 JSON 文档 | MongoDB 文档 | 强 schema 数据库（字段常变改起来痛苦） |
 | 用户画像（字段多变） | MongoDB | 频繁 ALTER |
 | 复杂关联报表 | MySQL/PG | MongoDB（关联弱） |
 | 强事务核心业务（支付） | 选能满足账务、审计与一致性要求的方案 | 仅因 MongoDB 有多文档事务就忽略完整账务设计 |
 | 海量写入 + 水平扩展 | MongoDB 分片 | 单机 MySQL 硬扛 |
 
+### 事实源、检索索引与保留策略
+
+> 先问“这条数据要证明什么、保留多久、能否重建”，再选 MongoDB 或 ES：
+>
+> - **业务/审计事实**：选择能满足不变量、审计与备份恢复目标的事实源；定义不可变记录、留存期与恢复演练。
+> - **灵活事件文档**：若 MongoDB 是事实源，先验证其文档模型、事务/读写关注级别以及 TTL/归档/备份策略能否满足该数据的不变量与恢复目标；异步写入 ES 后，ES 只是检索副本。
+> - **搜索或日志索引**：ES 可按 ILM 管理热温冷与删除，但应能从事实源或原始归档重建；最终一致的同步延迟也要对产品和排障可见。
+>
+> 前端迁移时，不要把“页面要全文筛选”误译成“ES 必须保存唯一数据”；它只说明查询目标。事实来源、检索索引和留存策略是三个独立设计决定。
+
 ## 红线小结（必背）
 
-1. **schema 灵活是双刃剑**：字段常变就用它，需要强约束强事务就别用。
+1. **schema 灵活是双刃剑**：字段常变时 MongoDB 是候选，不是自动结论；需要强约束、复杂关联或事务主流程时先评估关系型方案。
 2. **严格用索引**：否则全集合扫描。
 3. **线上需要副本集与备份策略**：单节点只适合作为开发或明确可接受单点风险的场景；`secondaryPreferred` 仅用于可容忍陈旧数据的读。
 4. **聚合统计用管道**：`$match/$group/$sort` 在库内完成，别拉全量到内存算。
@@ -284,7 +301,7 @@ Document user = new Document("name", "张三").append("orderIds", List.of("O1", 
 **答**：
 
 **标准结论**：
-- MongoDB 是文档型 NoSQL（Document Model）：以 BSON 文档存数据，schema 灵活、天然水平扩展。
+- MongoDB 是文档型 NoSQL（Document Model）：以 BSON 文档存数据，schema 灵活；需要扩展时可设计分片，但并非“天然无代价”的水平扩展。
 - MySQL 是关系型数据库：强 schema、强事务、擅长关联查询。
 - 选型看三点：字段是否常变、是否需要复杂关联与强事务、写入规模是否巨大。
 - 字段常变 + 海量写入 + 快速迭代 → MongoDB；复杂关联、支付等强事务场景 → MySQL。
@@ -316,12 +333,12 @@ Document user = new Document("name", "张三").append("orderIds", List.of("O1", 
 
 **答**：
 
-**标准结论**：MongoDB 文档的存储与传输格式是 BSON（Binary JSON），是 JSON 的二进制扩展：更多原生类型、更紧凑、解析更快。
+**标准结论**：MongoDB 文档的存储与传输格式是 BSON（Binary JSON），是 JSON 的二进制扩展：支持更多原生类型；体积和解析开销需按实际文档结构测量，不能笼统承诺一定更小或更快。
 
 **底层原理**：
 - BSON 在 JSON 基础上增加 Date、Binary、Decimal128、ObjectId 等类型。
-- 每个字段带类型标签和长度前缀，扫描时按偏移定位、无需解析字符串。
-- 省去引号花括号等冗余字符，体积更小。
+- 每个字段带类型标签和长度信息，驱动可按 BSON 规则解码；字段名仍会保留，大小取决于文档结构。
+- BSON 的价值首先是类型系统和驱动互操作，不是通用压缩；要压缩应评估存储/传输层策略和真实样本。
 - ObjectId 是 BSON 的 12 字节类型（4 字节时间戳 + 5 字节随机值 + 3 字节递增计数器）。它适合作为默认标识，但不应用其生成时间替代业务排序字段。
 
 **工程实践**：

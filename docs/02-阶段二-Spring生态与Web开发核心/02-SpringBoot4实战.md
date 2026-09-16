@@ -13,7 +13,7 @@
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
 | Spring Boot | 让 Spring 项目「开箱即用」的框架 | 引依赖 + 写几个类就能出接口 |
-| starter | 一组依赖与自动配置入口 | 引入 `spring-boot-starter-web` 才具备 Web 能力，别为一个类随意引入整组能力 |
+| starter | 一组依赖与自动配置入口 | Boot 4 的 MVC 应用引入 `spring-boot-starter-webmvc`，别为一个类随意引入整组能力 |
 | @SpringBootApplication | 项目入口：自动配置+组件扫描+配置类 | 放在能覆盖业务包的扫描根 |
 | 自动装配（Auto-Configuration） | Spring 按 classpath 和配置条件创建 Bean | 引入 Web starter 才满足 Web 相关条件 |
 | application.yml | 项目配置文件 | 多环境通过 profile 分层，不把密钥写死 |
@@ -25,7 +25,7 @@
 
 - **问题**：以前搭 Spring 要配一堆 XML/类，很繁琐。Boot 用「约定优于配置」——按套路放文件、引 starter，项目就能跑。
 - **一句话类比——酒店定食 vs 从头点菜**：生活版：坐进 Boot 这家店，位子（端口 8080）、餐具（JSON 转换）、菜单结构（目录约定）都摆好了，你只负责下单；不满意可以换（改 yml），但不用从摆桌开始。换成 Spring：Boot 预置好默认端口、默认 JSON 序列化、约定的目录结构与扫描规则，你写的 `application.yml` 只是「订单备注」——覆盖默认值，而不是从头搭一套。
-- **你要带走的一句话**：`@SpringBootApplication` 是入口，它同时干了「自动配置 + 组件扫描 + 自己是个配置类」三件事；写配置进 `application.yml`，很多能力靠「引 starter」就有了。
+- **你需要明确的点**：`@SpringBootApplication` 是入口，它同时干了「自动配置 + 组件扫描 + 自己是个配置类」三件事；写配置进 `application.yml`，很多能力靠「引 starter」就有了。
 
 ### 速览代码形态示意（非完整工程）
 
@@ -53,7 +53,7 @@ spring:
 ```
 
 ```java
-// ③ 一个接口: 引了 spring-boot-starter-web 就能用 @RestController
+// ③ 一个接口: Boot 4 引了 spring-boot-starter-webmvc 就能用 @RestController
 @RestController
 public class HelloController {
     @GetMapping("/hello")
@@ -65,7 +65,7 @@ public class HelloController {
 > - `@SpringBootApplication`：让 Spring 自动配置、扫描组件、并把自己当配置类——一个注解搞定三件事。
 > - `SpringApplication.run(...)`：启动内嵌 Tomcat 并运行业务。
 > - `application.yml`：集中放端口、数据库等配置；`${DB_PASSWORD}` 从环境变量读密钥（不写死）。
-> - `@RestController` + `@GetMapping`：引了 `spring-boot-starter-web` 后就有了 web 能力，写个类就能出接口。
+> - `@RestController` + `@GetMapping`：Boot 4 引了 `spring-boot-starter-webmvc` 后就有了 MVC Web 能力，写个类就能出接口。
 > - 你只引了一个 starter、写了几行，项目就跑起来了——这就是 Boot「约定优于配置」。
 
 ### 常用约定 / 命名提示
@@ -104,7 +104,7 @@ public class DemoApplication {
 
 > **NestJS 对照**：`@SpringBootApplication` ≈ 自动配置版的 `@Module`——NestJS 里模块、控制器、服务都要你手动登记进 `@Module` 的 imports / controllers / providers；Boot 则靠这一个注解自动完成「组件扫描 + 自动配置」，登记手续省了一大半，代价是「隐式发生」——排查时才需要看背后的机制（本讲 1.2 节）。
 
-> **starter**：一组依赖 + 一份自动配置的「套餐」，≈ 你熟悉的 npm 包——npm 装一个库会把它的依赖一起带上，starter 也一样，引一个依赖就得到全家桶。`spring-boot-starter-web` 引入即得 Tomcat + Spring MVC + Jackson（Jackson：JSON ↔ Java 对象互转库，对应你用过的 `JSON.stringify` / axios 自带的序列化）——「引了就有」不是依赖本身有魔力，而是它的 jar 里带着自动配置类。
+> **starter**：一组依赖 + 一份自动配置的「套餐」，≈ 你熟悉的 npm 包——npm 装一个库会把它的依赖一起带上，starter 也一样，引一个依赖就得到全家桶。Boot 4 的 `spring-boot-starter-webmvc` 引入即得 Tomcat + Spring MVC + Jackson（Jackson：JSON ↔ Java 对象互转库，对应你用过的 `JSON.stringify` / axios 自带的序列化）——「引了就有」不是依赖本身有魔力，而是它的 jar 里带着自动配置类。
 
 #### 1.2 条件装配：自动配置的开关
 
@@ -244,7 +244,7 @@ flowchart TD
 
 ### 3. 内置容器与三层拦截
 
-> 🧩 **前置 60 秒：Servlet 与 Servlet 容器**——Servlet 是 Java 世界处理 HTTP 请求的标准接口（≈ Node 的 `http.createServer((req, res) => ...)` 里那对 req/res 的规范版）；Tomcat 是实现这套规范、帮你接收连接和管理请求线程的「容器」。传统 Java 要把 war 包丢给外置的 Tomcat 部署；Boot 把 Tomcat **打进 jar**——`java -jar` 起的就是一台自带 Web 服务器（这就是「内嵌」），这也是容器能换成 Jetty/Undertow 的前提。本讲与第 3、6 讲都会反复用这两个词。
+> 🧩 **前置 60 秒：Servlet 与 Servlet 容器**——Servlet 是 Java 世界处理 HTTP 请求的标准接口（≈ Node 的 `http.createServer((req, res) => ...)` 里那对 req/res 的规范版）；Tomcat 是实现这套规范、帮你接收连接和管理请求线程的「容器」。传统 Java 要把 war 包丢给外置的 Tomcat 部署；Boot 把 Tomcat **打进 jar**——`java -jar` 起的就是一台自带 Web 服务器（这就是「内嵌」）。Boot 4 的 MVC starter 默认使用 Tomcat；需要替换容器时只按当前 Boot 4 官方支持的选项和迁移文档操作，不沿用旧版 Undertow 教程。本讲与第 3、6 讲都会反复用这两个词。
 
 `java -jar` 之后发生了什么——内嵌容器的启动时序，带你走一程：
 
@@ -299,7 +299,7 @@ public class AuthInterceptor implements HandlerInterceptor {  // Interceptor：S
 sequenceDiagram
     participant 浏览器 as 浏览器<br/>（发 HTTP 请求）
     participant 容器 as Tomcat/Servlet 容器<br/>（接收连接、管理请求线程）
-    participant Filter链 as Filter 链<br/>（容器层的安检，连 Spring 都还没进）
+    participant Filter链 as Filter 链<br/>（容器层的安检，早于 MVC 分发）
     participant 调度台 as DispatcherServlet<br/>（Spring MVC 总调度台，第 3 讲展开）
     participant Interceptor as Interceptor<br/>（Spring MVC 的迎宾，能看到 handler 方法）
     participant AOP代理 as AOP 代理<br/>（方法门口的保镖）
@@ -320,7 +320,7 @@ sequenceDiagram
 
 **为什么 Filter 在最外**：Filter 是 Servlet 容器规范，先于 Spring MVC 存在——请求进容器先走 Filter 链，才到 Spring 的 `DispatcherServlet`；Interceptor 是 MVC 内部的扩展点，所以它能拿到即将执行的 handler 方法，Filter 拿不到。
 > 注意：静态资源、错误分发（ERROR dispatch——错误请求的分发通道：请求处理出错时，容器会用 ERROR 模式把请求再分发一次）等非 Controller 请求可能不经过完整链路，排查问题时先确认请求类型。
-> 选型口诀：**跨技术栈的进 Filter（如 TraceID / CORS），跟路由方法绑定的进 Interceptor（如权限），跟 Bean 方法绑定的用 AOP（如审计日志）**。容器可换 Jetty / Undertow（另外两个 Servlet 容器实现，与 Tomcat 同属一个规范的三家厂子）：排除 `spring-boot-starter-tomcat` 引入替代 starter 即可。
+> 选型口诀：**跨技术栈的进 Filter（如 TraceID / CORS），跟路由方法绑定的进 Interceptor（如权限），跟 Bean 方法绑定的用 AOP（如审计日志）**。本讲的 Boot 4 MVC 基线固定为 Tomcat；Undertow 的旧 starter 已不属于 Boot 4 支持面，不能照搬 Boot 3 及更早版本的「排除 Tomcat、换 Undertow starter」配置。若有替换容器的明确需求，先核对目标 Boot 小版本的官方 Web 与迁移文档。
 
 ### 4. Actuator 监控
 
@@ -445,7 +445,7 @@ flowchart LR
 
 1. 引入 `spring-boot-starter-data-redis` 但没配 host，应用为什么能启动、什么时候才报错？这个行为和自动装配的哪个特性有关？
 2. 同一个配置在 yml、环境变量、命令行各写了一份，最终生效哪个？用这条规则解释「K8s 里改环境变量就能切配置」。
-3. 虚拟线程开启后，`synchronized` 里做阻塞 IO 的老代码会发生什么（联系阶段一第 7 讲 pinning）？
+3. Java 25 启用虚拟线程后，`synchronized` 里做阻塞 I/O 的老代码还会因监视器 pinning 吗？（提示：JEP 491 已消除该来源；仍需审计 `native` / foreign function 等可能长时间占住载体线程的边界，并按阶段一第 7 讲的超时、限流和隔离思路处理。）
 
 ## 常见面试题
 
@@ -492,7 +492,7 @@ flowchart LR
 - **跟路由方法绑定的进 Interceptor**（权限、限流）
 - **跟 Bean 方法绑定的用 AOP**（审计日志、事务）
 
-例外：别在 Filter 里做依赖 Spring 业务 Bean 的复杂逻辑——它执行时部分容器功能还没就绪。
+例外：由 Spring 管理的 Filter **可以注入业务 Bean**；请求到达时应用上下文已经就绪。仍不宜把复杂业务编排塞进 Filter：它位于 MVC 分发之前，难以取得 handler 语义，也会把横切入口与业务事务、错误语义耦在一起。Filter 更适合 TraceID、CORS 等通用职责；业务协调留给 Service / Controller 或明确的拦截器。
 
 ### Q4：`@ConfigurationProperties` 和 `@Value` 有什么区别？为什么推荐前者？
 **答**：

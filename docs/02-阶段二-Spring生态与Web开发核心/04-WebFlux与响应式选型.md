@@ -23,7 +23,7 @@
 ### 本讲在解决什么问题
 
 - **问题**：要不要上响应式（WebFlux）？很多人以为「响应式 = 高性能 = 必须学」。实际上虚拟线程出现后，普通业务用 WebMVC + 虚拟线程就够。
-- **你要带走的一句话**：**绝大多数业务用 WebMVC + 虚拟线程**；WebFlux 只在「API 网关、SSE 流式推送、要精细背压」时才上。别在响应式编程上过早投入。
+- **你需要明确的点**：**绝大多数业务用 WebMVC + 虚拟线程**；WebFlux 只在「API 网关、SSE 流式推送、要精细背压」时才上。别在响应式编程上过早投入。
 
 ### 速览代码形态示意（非完整工程）
 
@@ -94,7 +94,7 @@ pipeline.subscribe(v -> System.out.println(v));   // 终端: 订阅(≈ Observab
 // 输出: 4 16 36 64 100 —— 且 range 只"生产"到 10 就停了(take 向上游传 cancel)
 ```
 
-- 与 WebFlux 的关系：WebFlux = Reactor 类型 + Netty（异步事件驱动网络框架，事件循环的主场——下文「纪律成本」细讲）事件循环 + 注解/函数式路由。Controller 返回 `Mono<User>` 时框架订阅它并把结果写出。
+- 与 WebFlux 的关系：WebFlux = Reactive Streams 编程模型 + 注解/函数式路由；Boot 的 WebFlux starter 常配 Reactor Netty，但 WebFlux 也可运行在支持非阻塞 I/O 的 Servlet 容器上。Controller 返回 `Mono<User>` 时框架订阅它并把结果写出。
 - `Mono.just()`（已有值）vs `Mono.defer()`（订阅时才求值）的差别，等价于 JS 里「传 Promise 还是传 `() => Promise`」——副作用场景选后者。
 - 对照前端心智的另一个落差：Promise 是「急性」的——`new Promise` 立即开始执行；Mono 默认是「冷」的——不订阅不执行，且**每次订阅都从头重新执行**，所以副作用（发请求 / 写库）必须显式声明，别藏在操作符链里。
 
@@ -118,7 +118,7 @@ flowchart LR
 
 **背压（Backpressure）**：下游通过 `request(n)` 声明「我最多再要 n 个」，上游按需生产——解决「快生产者淹没慢消费者」的内存爆炸。
 
-- **为什么 `take(n)` 模拟不来**：`take(n)` 只是消费端「截取 n 个就停」的单向动作，上游根本不知道你慢；
+- **为什么 `take(n)` 不等于背压**：`take(n)` 的目标是限制结果数量；达到 n 个后会向上游发送 `cancel`。当前 Reactor 的 `take(n)` 也会把上游总请求量限制在 n 以内，因此它不会让这个可协作的上游完整生产后再丢弃；但它没有表达「消费者处理不过来时，请按我的持续处理速度供给」的需求协商，不能拿来代替背压设计。若显式使用 `take(n, false)`，才可能因无界请求与取消竞态产生额外元素。
 - **`request(n)` 是订阅协议里的双向协商**：上游会真的按 n 生产（EventEmitter 根本没有这个概念）。
 
 **自助餐出餐口类比（生活版）**：生产者 = 后厨的出餐速度，大盘菜源源不断端出来；消费者 = 你的吃速。没有背压 = 出餐口不管你吃没吃完，一直往你桌上堆盘子，越堆越高直到「桌子塌了」——对应内存被未消费的元素撑爆。`request(n)` 就是你说「我盘子空了，再给我上一份」——节奏由消费者掌控，后厨永远只领先你一步。
@@ -135,7 +135,7 @@ sequenceDiagram
     消费者->>消费者: 处理(慢: 写库/调下游)
     消费者->>上游: 处理完, 再 request(1)
     上游-->>消费者: 再发 1 个元素
-    Note over 消费者,上游: 上游永远只领先消费者一步以内
+    Note over 消费者,上游: 此示例每次只请求 1 个，因此最多 1 个元素待处理（不考虑中间操作符缓冲）
 ```
 
 ```java
@@ -147,7 +147,7 @@ Flux.range(1, 1_000_000)                  // 百万个元素的"无限"源
         }
         @Override protected void hookOnNext(Integer value) {
             doSlowWork(value);            // 模拟慢处理(写库/调下游)
-            request(1);                   // 做完一个再要下一个: 上游永远领先消费者一步以内
+            request(1);                   // 做完一个再要下一个：本示例中最多 1 个元素待处理
         }
         @Override protected void hookOnError(Throwable t) { }
         @Override protected void hookOnComplete() { }
@@ -221,10 +221,10 @@ flowchart TD
 
 - **纪律成本——为什么「阻塞是事故」**：WebFlux 跑在 Netty（Java 生态最主流的异步事件驱动网络框架，网关与 WebFlux 的事件循环都建立在它之上）的 **EventLoop**（事件循环——就是 Node 事件循环的同类机制，Java 版由 Netty 提供）上。
 - **事故后果**：任何一处阻塞调用（同步 JDBC / `Thread.sleep` / 同步 HTTP）都会卡死整个 EventLoop 线程，殃及同线程全部请求——响应式项目里阻塞是事故，不是慢。
-- **场景类比（生活版）**：一个核一个 EventLoop 线程，相当于餐厅一个核一个服务员——他跑去厨房帮忙洗碗（阻塞调用），他负责的所有桌子全部饿着（同线程全部请求陪葬）。
+- **场景类比（生活版）**：Reactor Netty 默认按运行时可用处理器数创建 worker（最少 4 个，可配置），每个 EventLoop 像一名服务员轮转处理一批桌子；他跑去厨房洗碗（阻塞调用）时，分给他的桌子都会饿着。线程数量不是“一个核固定一个”的通用定律。
 - **前端对照**：前端读者可对照「Node 事件循环里写一个同步死循环会卡死所有请求——同一个道理」。
 - **全链路都要响应式驱动**：R2DBC / **WebClient**（Spring 自带的响应式 HTTP 客户端——≈ axios 的响应式版）/ Reactive Redis 全线参与。
-- **例外**：混一个同步 ORM，全盘失效。
+- **例外**：同步 ORM 若直接跑在 EventLoop 上会拖慢该线程的请求；若必须保留，应隔离到受控的专用调度器并限制并发，但这已不是端到端非阻塞链路。
 
 ### 4. 选型判断（本讲最重要的一页）
 
@@ -310,8 +310,8 @@ flowchart TD
 
 **原理层**：
 - Reactor 的订阅协议（`Publisher` ↔ `Subscriber`）里，订阅建立时上游把 `Subscription`（订阅凭证——下游拿它来 `request(n)` 拉数据、`cancel()` 叫停的控制把手）交给下游
-- 下游每次 `request(n)` 才从上游「拉取」n 个元素，上游生产永远领先消费者一步以内
-- `take(n)` 之类的消费端截断**不是**背压——它不通知上游按量生产，上游照样全量生产只是消费端丢弃
+- 下游通过 `request(n)` 声明尚可接收的数量；遵守 Reactive Streams 的上游最多发送已请求的元素。实际在途数量还会受批量请求和操作符预取缓冲影响，不能概括成“永远只领先一步”。
+- `take(n)` 是**限量并在达到数量后取消上游**，不是持续的背压策略；当前 Reactor 的 `take(n)` 会把总请求量上限收敛到 n。只有 `take(n, false)` 等无界请求变体，才可能在取消前让上游产生额外元素。背压讨论的重点仍是整个链路是否持续响应 `request(n)`。
 
 **工程层**：背压要全链路闭环才有意义：
 - WebFlux 的 HTTP 客户端、R2DBC 驱动都支持 request 语义
@@ -319,13 +319,13 @@ flowchart TD
 - 所以能源头限流就别依赖缓冲
 
 ### Q4：为什么说「WebFlux 里阻塞调用是事故」？EventLoop 模型是怎样的？
-**答**：**标准答案**：WebFlux 跑在 Netty 的 EventLoop（事件循环）上——**一个核一个 EventLoop 线程**，它用非阻塞 IO 循环处理成千上万个连接的事件；一旦某个 handler 里出现阻塞调用（同步 JDBC / `Thread.sleep` / 同步 HTTP），这个线程就卡住不动，**同线程上承载的所有请求全部陪葬**，服务表现为「偶发整体卡死」。
+**答**：**标准答案**：当 WebFlux 运行在 Boot 默认的 Reactor Netty 上时，请求由少量可配置的 EventLoop worker 轮转处理；默认 worker 数通常等于运行时可用处理器数（最少 4），不是固定“一核一线程”。一旦 handler 在该线程执行同步 JDBC、`Thread.sleep` 或同步 HTTP，这个 EventLoop 就无法继续处理分给它的连接，表现为该批请求延迟飙升或超时。WebFlux 也可部署在非阻塞 Servlet 容器上，核心纪律相同：不能在非阻塞 I/O 执行路径阻塞。
 
 **原理层**：这是「少量线程 + 非阻塞 IO」模型的代价：
 - 线程数少，所以每个线程都必须「占着茅坑不拉屎式」地永不阻塞
 - 对比虚拟线程是「大量线程 + 阻塞廉价」，阻塞被 JVM 调度器吸收
 
 **工程层**：纪律三条——
-1. 全链路响应式驱动（R2DBC / WebClient / Reactive Redis），混一个同步 ORM 就全盘失效
-2. 真有无法响应式的阻塞代码（遗留 SDK），用 `publishOn(Schedulers.boundedElastic())` 甩到隔离线程池，但要清楚它只是隔离区，不解决背压也不省内存
+1. 优先全链路响应式驱动（R2DBC / WebClient / Reactive Redis）；同步 ORM 不可直接跑在 EventLoop。
+2. 真有无法响应式的阻塞代码（遗留 SDK），按阻塞源所在位置用 `subscribeOn` 或 `publishOn(Schedulers.boundedElastic())` 隔离，并限制并发；它只是隔离区，不解决背压、数据库连接池或慢任务堆积。
 3. 面试被问「WebFlux 踩过什么坑」，这个模型和纪律成本是标准答案

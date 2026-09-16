@@ -29,7 +29,7 @@
 ### 本讲在解决什么问题
 
 - **问题**：写接口不难，难的是「接口可维护、前端对接舒服」。要统一响应格式、统一错误码、处理参数校验、分页、幂等。
-- **你要带走的一句话**：好的接口 = **统一响应 + 明确错误码 + 参数校验 + 合理分页 + 幂等**。前端同事对接时舒服，是因为这些约定你在一开始就定好了。
+- **你需要明确的点**：好的接口 = **统一响应 + 明确错误码 + 参数校验 + 合理分页 + 幂等**。前端同事对接时舒服，是因为这些约定你在一开始就定好了。
 
 ### 速览代码形态示意（非完整工程）
 
@@ -61,7 +61,7 @@ public class UserController {
 
 ### 常用约定 / 命名提示
 
-- **统一响应体**：`{code, message, data}`，成功 code=0，业务失败可回 HTTP 200 + 业务 code，系统错误回对应状态码。
+- **统一响应体**：`{code, message, data}`，`code` 用于稳定的业务细分和前端文案；默认仍让 HTTP 状态码表达成功、参数错误、未认证、无权限、未找到、冲突和服务端失败。`HTTP 200 + 业务码` 只为既有客户端兼容保留，且认证/授权失败绝不能伪装成 200。
 - **幂等的三板斧**：防重 token / 唯一索引 / 状态机——用于支付、下单这种不能重复执行的场景。
 - **分页约定**：页码式用 `page/size/total`，游标式用 `cursor/nextCursor`——按业务选。
 - **错误码分段**：如 `4xxxx` 参数、`5xxxx` 业务、`9xxxx` 系统，前端按段决定提示方式。
@@ -295,13 +295,11 @@ public enum BizCode {
 
 > 响应示例：`{"code": 50002, "message": "库存不足", "data": null, "traceId": "a3f8c2e1"}`——`traceId` 联动上一讲的 MDC，前端报障时带上它，日志一查一个准。
 
-> 🏥 **生活类比：HTTP 状态码 = 医院分诊台，业务 code = 科室医生给的诊断单**——分诊台只判断「这单通信本身有没有问题」：送到了（200）、没送到（404/500）、找错门（404/405）。它不负责告诉你病看得成不看成——挂号成功了吗、余额够不够，得等科室医生（业务层）看完，才在诊断单（body 里的 code）上写结论。所以「挂号成功但余额不足」时，分诊台依然算你顺利到达：HTTP 还是 200，真正的结果写在诊断单里。
-> 换成接口：分诊台 = HTTP 状态码，诊断单 = 业务 code。带着这个分工看下面的技术论证——
-
-> **为什么业务失败也回 HTTP 200（业务码在 body 里）**：
-> - **HTTP 状态码语义有限**：只有「成功 / 客户端错 / 服务端错」几档，表达不了「库存不足」这类业务拒绝。
-> - **4xx/5xx 会惊动中间层**：触发浏览器、网关、代理的缓存与重试等干预行为，业务错误没必要惊动它们。
-> - **落地口径**：国内团队普遍「HTTP 管传输层对错、code 管业务层对错」**双轨制**；对外部第三方开放 API 时则更倾向纯 HTTP 状态码 + RFC 7807——二选一、全公司统一即可。
+> 🏥 **生活类比：HTTP 状态码 = 分诊结果，业务 code = 诊断细目**——分诊不仅确认“人到了”，还要标明该走哪条处理路径：正常完成（2xx）、提交材料有误（4xx）、服务处理失败（5xx）。医生的诊断单再补充机器可读的细目，如库存不足、字段哪一项不合法。换成接口：HTTP 状态码先表达协议层可观察的结果，body 的 `code` 再表达稳定的业务分类，二者不冲突。
+>
+> **默认口径：语义化 HTTP + 业务码细分**：成功返回 2xx；参数无效用 400、未认证用 401、已认证但无权用 403、资源不存在用 404、状态冲突如库存不足用 409、未预期错误用 5xx。业务码仍可放在 body 中，供前端展示和埋点，但不覆盖 HTTP 语义。RFC 9110 规定 401 表示缺少有效认证凭据、403 表示服务器理解请求但拒绝执行。[RFC 9110：HTTP 状态语义](https://www.rfc-editor.org/rfc/rfc9110.html)
+>
+> **遗留兼容边界**：若历史 Web 客户端、网关或 SDK 已把所有业务结果约定为 `200 + code`，可在明确版本/迁移计划内维持兼容；新接口不应继续扩散此约定。尤其 token 缺失、失效、权限不足必须分别返回 401/403，不能以 200 隐藏认证失败，否则缓存、监控、客户端拦截器和安全审计都会失去正确语义。
 
 #### 2.2 版本化策略
 
@@ -314,35 +312,39 @@ public enum BizCode {
 
 #### 2.3 幂等设计（重试安全的基础）
 
-**幂等（Idempotency）**：同一个请求发一次和发 N 次，效果相同。HTTP 重试（超时重试、用户狂点）天然存在，所以「写接口」必须幂等——这也是阶段四 RPC 重试的配套纪律。
+**幂等（Idempotency）**：同一个**业务作用域内**的请求发一次和发 N 次，效果相同。业务作用域至少包括「已认证调用方 + 操作名（或接口版本）+ 幂等键」；多租户系统还要带上 tenant。HTTP 重试（超时重试、用户狂点）天然存在，所以「写接口」必须幂等——这也是阶段四 RPC 重试的配套纪律。
 
 > 🎟️ **生活类比：演唱会门票「一张座位只卖一次」**——售票先「查座位卖出没」（先读）再「标记已售」（再写）看似稳妥，但两个人同时下单时，两个查询都读到「未售出」，就都买成了——这正是「先查后写」被并发插队的漏洞；售票那一刻若把「检查 + 占用」压成一个原子动作（谁先提交谁得票），就只有第一个买得到。
-> 换成 Spring MVC/Redis：先查后写 = 两步非原子操作；`SETNX`（不存在才写入） = 售票瞬间的原子动作，天然保证只有第一个请求生效——幂等的本质就是「并发下的原子检查-执行」。
+> 换成 Spring MVC/Redis：先查后写 = 两步非原子操作；`SETNX`（不存在才写入） = 售票瞬间的原子动作，能在**同一业务作用域**内原子争抢执行权。幂等键不是全局唯一字符串：不同用户、租户或操作复用同一个键不应互相拦截；同一作用域下同一个键却带不同请求体，则必须拒绝而不是误当成同一请求。
 
 ```java
 @Service
-public class IdempotentOrderService {
+public class DuplicateSubmitGuard {
     // Redis 是阶段三第 4 讲主角——这里只用它「不存在才写入」的命令实现幂等锁
     private final StringRedisTemplate redis;
     private final OrderRepository orderRepo;
 
-    // 方案一：防重 token —— 客户端先领 token, 提交时带上, 服务端原子消费
-    public Long placeOrder(String idempotencyKey, CreateOrderCmd cmd) {
-        // SETNX: 不存在才写入成功 = 抢到"执行权"; 30s 过期兜底客户端不再回传的死 token
+    // 方案一：防重 token —— 客户端先领 token, 提交时带上, 服务端在业务作用域内原子消费。
+    // actorId 必须来自认证上下文，不能相信客户端随请求提交的 userId；多租户还应拼 tenantId。
+    public Long placeOrder(Long actorId, String idempotencyKey, CreateOrderCmd cmd) {
+        String scopedKey = "idem:order:create:" + actorId + ":" + idempotencyKey;
+        // SETNX: 不存在才写入成功 = 抢到当前用户创建订单的"执行权"。
         Boolean first = redis.opsForValue()
-                .setIfAbsent("idem:" + idempotencyKey, "1", Duration.ofSeconds(30));
+                .setIfAbsent(scopedKey, "1", Duration.ofSeconds(30));
         if (Boolean.FALSE.equals(first)) {
             throw new BizException(BizCode.DUPLICATE_REQUEST, "重复提交, 请勿重试");
         }
         try {
-            return orderRepo.save(cmd.toOrder()).getId();   // 真正的业务只可能发生一次
+            return orderRepo.save(cmd.toOrder()).getId();   // 当前短窗口内只有抢到执行权的请求会进入
         } catch (Exception e) {
-            redis.delete("idem:" + idempotencyKey);         // 业务失败要还 token, 允许用户重试
+            redis.delete(scopedKey);                         // 业务失败释放本次作用域的占用，允许重试
             throw e;
         }
     }
 }
 ```
+
+> **示例边界**：这段 `SETNX + 30 秒 TTL` 只演示“作用域化的原子抢占”，适合拦截短时间重复点击，并不是完整的跨日幂等实现。成功后没有持久化请求摘要和响应结果，TTL 到期后同一个键仍可能再次执行业务；Redis 与数据库之间也没有原子事务。要求跨日重试仍返回同一结果时，应使用下面的持久化幂等记录，在同一数据库事务中保存 `request_hash`、处理状态和响应摘要，重复请求读取旧结果，不同请求体则拒绝。
 
 > token 方案完整时序一图看清（原理解释见图注）：
 
@@ -356,13 +358,13 @@ sequenceDiagram
     C->>S: ① 先领防重 token
     S-->>C: 返回 token
     C->>S: ② 提交请求，带上 token
-    S->>R: SETNX("idem:" + token)
+    S->>R: SETNX("idem:order:create:actorId:key")
     alt 第一个请求：SETNX 成功（抢到执行权）
         R-->>S: OK
-        S->>B: 执行业务（只可能发生一次）
+        S->>B: 执行业务（当前防重窗口内仅首个请求进入）
         alt 业务成功
             B-->>S: 成功
-            S->>R: ③ 删 token（用一次作废）
+            S->>R: ③ 保留占用标记至 TTL（短窗口内拒绝重复提交）
             S-->>C: 成功响应
         else 业务失败
             B-->>S: 抛异常
@@ -378,10 +380,14 @@ sequenceDiagram
 > 图注（为什么用 SETNX 而不是「先 GET 判断、再 SET」）：后者是两步操作，两步之间并发请求可以插队——两个请求都能通过检查，幂等就被绕过了。`SETNX`（不存在才写入）是一条原子命令，「检查 + 写入」一步完成，天然保证只有第一个请求能抢到执行权。
 
 ```sql
--- 方案二：数据库唯一索引 —— 最后防线, 前面全被绕过它也能兜住
--- 业务唯一键建唯一索引, 重复插入直接报 DuplicateKeyException → 捕获后转"重复提交"
-ALTER TABLE t_order ADD UNIQUE KEY uk_user_product (user_id, product_id, created_date);
+-- 方案二：持久化幂等记录的唯一约束 —— 最后防线。
+-- 幂等键的唯一性属于调用方和操作，不是全局、更不是「同一商品当天只能下一单」。
+-- 多租户场景把 tenant_id 也放入唯一键；request_hash 用于识别同一 key 携带不同请求体。
+ALTER TABLE t_idempotency_request
+    ADD UNIQUE KEY uk_idempotency_scope (tenant_id, actor_id, operation, idempotency_key);
 ```
+
+> 业务唯一约束与幂等唯一约束要分开：例如「一个用户只能领取一次新人券」可以另建 `uk_user_coupon(user_id, coupon_id)`；普通商品订单则不应因为幂等设计而意外变成「同一用户同一天只能买一次」。同一作用域的幂等键重复且 `request_hash` 不同，应返回参数冲突，不执行或复用旧结果。
 
 - 方案三（状态机）：只允许合法状态迁移——`WHERE status = 'CREATED'` 的 UPDATE 天然拒绝第二次。
 - 实践组合：**入口 token 拦一道 + 库表唯一索引兜底**，状态机用于业务流转本身。
@@ -534,7 +540,7 @@ public class WebConfig implements WebMvcConfigurer {
 
 **原理层**：B+ 树的索引扫描是「定位起点后顺序读」。游标方案把起点定位从「从头数 N 行」变成「直接定位到某条记录」，复杂度从 O(offset) 降到 O(1)。
 
-**工程层**：后台管理这种「能跳页」的场景保留页码式，但**限制最大页数 / 最大 offset**；面向用户的分页**一律游标**。
+**工程层**：后台管理这类需要跳页的场景保留页码式，但限制最大页数 / 最大 offset；面向用户的连续浏览在数据量与排序稳定性满足时优先游标，是否采用仍取决于“能否跳页”、一致性和产品交互。
 
 ### Q4：什么是 CORS 预检？排查跨域问题从哪几个点入手？
 

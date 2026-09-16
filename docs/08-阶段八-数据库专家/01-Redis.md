@@ -55,7 +55,7 @@ public class CacheService {
 |-|-|-|-|
 | String | 简单动态字符串 | 计数器、缓存单值、分布式锁 | 计数用 `INCR`（原子） |
 | Hash | 哈希表 | 存对象（购物车 `{skuId:cnt}`） | 一个 key 多个字段 |
-| List | 双向链表 | 简单队列/栈、消息 | 左右两端 `LPUSH/RPOP` |
+| List | quicklist（由紧凑 listpack 节点组成的双向链） | 简单队列/栈、消息 | 左右两端 `LPUSH/RPOP` |
 | Set | 哈希/整数集合 | 去重、共同关注（交集） | `SINTER` 求交集 |
 | ZSet | 跳表+哈希 | 排行榜、延迟队列 | score 决定排序 |
 
@@ -64,7 +64,7 @@ flowchart LR
     subgraph 五大数据结构
         String["String<br/>底层=动态字符串 SDS<br/>计数 / 缓存单值 / 锁"]
         Hash["Hash<br/>底层=哈希表<br/>存对象：一个 key 多个字段"]
-        List["List<br/>底层=双向链表<br/>简单队列 / 栈"]
+        List["List<br/>底层=quicklist（紧凑节点的双向链）<br/>简单队列 / 栈"]
         Set["Set<br/>底层=哈希 / 整数集合<br/>去重 / 求交集"]
         ZSet["ZSet<br/>底层=跳表+哈希表<br/>排行榜 / 延迟队列"]
     end
@@ -80,7 +80,9 @@ flowchart LR
 >   - **为什么单线程（生活版类比）**：就像单人柜台：一个人干活不用等别人、不用协调，比多人柜台（多线程）容易把活干完——缺点是一条长业务（大 key / `KEYS`）会把柜台堵死。
 >   - **为什么单线程（技术结论）**：省掉锁竞争与上下文切换，纯内存命令本身极快，瓶颈常在网络 IO——所以用 IO 线程把网卡吞吐摊开，命令执行保持单线程的简单与有序。
 
-> ⏸️ **短期可以不学**：各编码的「触发切换阈值」与源码级实现（listpack/ziplist/intset 何时升级、阈值多少）。**何时回来学**：做 Redis 内存/大 key 优化评审、或开始读 Redis 源码时。**面试最低要求**：说出「ZSet 底层是跳表+哈希表、小数据用紧凑编码省内存」即可。
+> **List 不要简化成“纯双向链表”**：当前 Redis 的 List 编码是 quicklist；它把多个紧凑节点串起来，节点内容使用 listpack。旧版本资料会看到 quicklist 中的 ziplist，故排查内存时先确认 Redis 版本和 `OBJECT ENCODING key` 的实际输出。[Redis：OBJECT ENCODING](https://redis.io/docs/latest/commands/object-encoding/)
+>
+> ⏸️ **短期可以不学**：各编码的「触发切换阈值」与源码级实现（listpack/ziplist/intset 何时升级、阈值多少）。**何时回来学**：做 Redis 内存/大 key 优化评审、或开始读 Redis 源码时。**面试最低要求**：说出「List 用 quicklist 兼顾两端操作与紧凑存储，ZSet 底层是跳表+哈希表」即可。
 
 ### 2. 过期与淘汰策略
 ```java
@@ -92,20 +94,26 @@ redis.opsForValue().set(key, val,
 > **该怎么做**：大多数缓存设置 TTL，并在同批写入、同一热点集中到期时加入随机扰动（`ThreadLocalRandom`）；永久 key 则要定义显式失效和容量上限。
 > **不该怎么做**：无生命周期地长期保留会变化的缓存。`maxmemory-policy` 应按可丢弃性选择：默认 `noeviction` 在内存满时拒绝会增加内存的写入，`allkeys-lru` 适合允许淘汰任意缓存的场景。
 
+> **TTL 过期 ≠ 内存淘汰**：带 TTL 的 key 到期后，Redis 会在访问该 key 时被动删除，并周期性主动抽样删除；这是 key 的生命周期，不依赖内存是否已满。淘汰（eviction）只在达到 `maxmemory` 后按策略选择可删 key，是内存压力保护，不能替代业务过期规则。前端类比：浏览器缓存的 `max-age` 像 TTL；设备存储满后清理像 eviction。重要缓存仍应显式设置 TTL，且不能把“到期瞬间一定物理删除”当作语义。[Redis：EXPIRE](https://redis.io/docs/latest/commands/expire/) / [Redis：内存淘汰](https://redis.io/docs/latest/develop/reference/eviction/)
+
 ## 进阶：企业级惯用法与专业实践
 
 ### 1. 缓存三大经典问题（穿透 / 击穿 / 雪崩）
 
 ```java
-// 防穿透: 查询不存在的 key, 缓存 null 占位(短 TTL), 避免每次都打 DB
-// 注意: StringRedisTemplate 的 value 是 String, 因此这里存的是 JSON 字符串, 不直接存 User 对象
+// 防穿透: 查询不存在的 key, 缓存空值占位(短 TTL), 避免每次都打 DB。
+// 注意: StringRedisTemplate 的 value 是 String；NULL_PLACEHOLDER 是保留标记，不能当作 User JSON 反序列化。
+private static final String NULL_PLACEHOLDER = "__cache_null__";
+
 public User getUser(Long id) {
     String key = "user:" + id;
     String json = redis.opsForValue().get(key);
-    if (json != null) return JsonUtil.fromJson(json, User.class);        // 命中: 反序列化
+    if (NULL_PLACEHOLDER.equals(json)) return null;                      // 命中空值：直接返回，不访问 DB
+    if (json != null) return JsonUtil.fromJson(json, User.class);        // 命中真实 JSON：才反序列化
+
     User u = userRepo.findById(id);
     if (u == null) {
-        redis.opsForValue().set(key, NULL_PLACEHOLDER, Duration.ofSeconds(60));  // 查不到也缓存空标记
+        redis.opsForValue().set(key, NULL_PLACEHOLDER, Duration.ofSeconds(60)); // 查不到才写短 TTL 空标记
     } else {
         redis.opsForValue().set(key, JsonUtil.toJson(u), Duration.ofSeconds(60));
     }
@@ -122,7 +130,8 @@ public User getUser(Long id) {
 ```mermaid
 flowchart TD
     A["请求进来查缓存"] --> B{"缓存命中?"}
-    B -- "是" --> C["直接返回<br/>不动 DB"]
+    B -- "真实 JSON" --> C["反序列化并返回<br/>不动 DB"]
+    B -- "空值占位" --> C0["直接返回 null<br/>不动 DB"]
     B -- "否" --> D{"key 在不在?"}
     D -- "不存在<br/>穿透风险" --> E["缓存 null 占位<br/>+ 布隆过滤器拦截"]
     D -- "存在但过期" --> F{"热点还是大量?"}
@@ -136,16 +145,51 @@ flowchart TD
 
 > **不该怎么做**：缓存穿透用「查询前不加任何判断」——恶意请求会打垮 DB。
 
-### 2. 缓存一致性（先更 DB 再删缓存）
+### 2. 缓存一致性（数据库提交成功后删缓存）
 ```java
+// 生产骨架：业务数据与失效事件同一 DB 事务提交；提交后由可靠投递器删缓存。
+// 省略：Outbox 表结构、分布式抢占/重试退避、监控告警与 dead-letter 处理。
 @Transactional
 public void update(User u) {
-    userRepo.update(u);               // ① 先更数据库
-    redis.delete("user:" + u.getId()); // ② 再删缓存(下个请求重新回填, 读到新值)
+    userRepo.update(u);                                        // ① 更新事实源
+    outboxRepo.save(CacheInvalidation.pending("user:" + u.getId())); // ② 同事务写失效事件
+} // ③ 此处事务成功提交后，数据与事件才同时可见
+
+@Scheduled(fixedDelayString = "${cache.invalidation.poll-delay-ms:1000}")
+public void dispatchInvalidations() {
+    for (CacheInvalidation event : outboxRepo.claimPendingBatch(100)) {
+        try {
+            redis.delete(event.cacheKey());                     // ④ 提交后才删缓存；重复删是幂等的
+            outboxRepo.markDelivered(event.id());               // ⑤ 成功后记账；崩溃在两步之间会重试删除
+        } catch (RedisConnectionFailureException ex) {
+            outboxRepo.scheduleRetry(event.id(), ex.getMessage()); // 留待重试，不能吞掉
+        }
+    }
 }
 ```
-> **该怎么做**：常用 **先更新数据库、提交成功后删缓存**（Cache-Aside），并为删除失败准备重试、消息/订阅或变更数据捕获补偿。它降低旧值长期滞留的概率，但进程在提交与删缓存之间崩溃、并发回填等情况仍需额外治理，不能单凭两行代码承诺所有读立即最新。
-> **不该怎么做**：先删缓存再更 DB——并发下会把旧数据放回缓存（数据不一致）。
+> **顺序为什么必须这样**：如果在事务尚未提交时删缓存，另一个请求可能回源读到旧提交版本，再把旧值写回缓存；事务随后提交，新值反而被旧缓存遮住。上例让“事实源更新”和“待失效事件”同事务提交，投递器只能在提交后删除缓存；投递器崩溃或 Redis 不可用时，未完成事件保留并重试。Redis 的 Cache-Aside 示例也采用写入主库后删除缓存，而不是试图让缓存与主库双写保持同步。[Redis：Java Cache-Aside](https://redis.io/docs/latest/develop/use-cases/cache-aside/java-jedis/)
+
+> **`after-commit` 不是可靠投递的同义词**：单体、低风险场景可在服务内发布事件，再用 `@TransactionalEventListener(phase = AFTER_COMMIT)` 调用 `redis.delete`；Spring 保证监听器在成功提交后才处理。若删除失败、进程在提交后崩溃，单靠监听器仍可能遗漏，需叠加重试记录。跨服务或要求可追溯时，使用上面的 Outbox + 消息投递；也可用数据库 CDC（从已提交的变更日志产生失效事件）做补偿或主链路。Spring 的事务绑定事件阶段见[官方文档](https://docs.spring.io/spring-framework/reference/data-access/transaction/event.html)。
+
+```mermaid
+sequenceDiagram
+    participant R as 读请求
+    participant W as 写事务
+    participant D as 数据库
+    participant C as Redis 缓存
+    participant O as Outbox/投递器
+
+    R->>C: 缓存未命中
+    R->>D: 读取旧值
+    W->>D: 更新数据 + 写失效事件（同一事务）
+    W->>D: 提交成功
+    O->>C: 删除 key
+    R->>C: 可能在删除后才把刚读到的旧值回填
+    Note over C: 仍可能短暂陈旧，需 TTL、重试失效/CDC 与版本策略收敛
+```
+
+> **并发回填窗口仍存在**：提交后删缓存解决了“先删后写”的典型竞态，却不能保证线性一致。读请求若在写入提交前读到旧值、又在删除后回填旧值，就会留下一个短暂旧缓存。对允许短暂陈旧的详情页，用 TTL + Outbox 重试/CDC 补偿收敛；对热点 key 可评估互斥重建、逻辑过期或版本号校验；对库存、余额等必须读到最新的事实，读写应直接走具备事务语义的事实源，不能靠缓存失效协议兜底。
+> **不该怎么做**：先删缓存再更新数据库；也不要把“提交后删缓存”误解成“所有读取立即最新”，更不能在 Redis 删除失败后仅记录日志就丢弃任务。
 
 ### 3. Redis 事务 / Lua 脚本（原子性）
 
@@ -307,7 +351,7 @@ flowchart TD
 | 会话存储 | Redis TTL | 存本地内存（多实例不同步） |
 | 扣库存原子性 | Lua 脚本 | `GET`→`DECR` 三步 |
 | 大 key | 拆分/分段 | 单 key 巨大（阻塞/内存） |
-| 缓存一致性 | 先更 DB 再删缓存 | 先删缓存再更 DB |
+| 缓存一致性 | DB 提交成功后删缓存 + 可靠重试/补偿 | 先删缓存再更 DB，或删失败只记日志 |
 
 ## 红线小结（必背）
 
@@ -323,14 +367,14 @@ flowchart TD
 
 - [ ] 能说出 String/Hash/List/Set/ZSet 各自最典型的场景与底层结构
 - [ ] 能复现并解决缓存穿透 / 击穿 / 雪崩
-- [ ] 能写出 Cache-Aside 的正确更新顺序，并解释为什么
+- [ ] 能写出 Cache-Aside 的正确更新顺序：DB 事务提交成功后删缓存，并说明 Outbox/事务事件、重试或 CDC 各解决什么问题
 - [ ] 能用 Lua 脚本实现「判断+扣减」的原子操作
 - [ ] 能用管道做批量操作，说明省了什么
 - [ ] 能用 Redisson 实现带看门狗 + finally 释放的分布式锁
 - [ ] 能说清主从 / 哨兵 / Cluster 的差异，以及 RDB / AOF 的取舍
 - [ ] 场景：商品详情缓存允许 5 分钟陈旧，但下单扣库存必须可靠。能说明哪些数据放 Redis、哪些保留为事实源，以及缓存删除失败时的补偿方式。
 
-> **核对要点**：商品详情可用 Cache-Aside 加 TTL 和删除重试；库存事实与扣减结果应在可恢复的事务性数据源中确认。Lua 只能保证 Redis 内一次脚本原子，不能替代跨系统一致性。
+> **核对要点**：商品详情可用 Cache-Aside 加 TTL、提交后失效和删除重试；库存事实与扣减结果应在可恢复的事务性数据源中确认。读回填可与失效并发，TTL、事件重试/CDC 和必要时的版本策略用于收敛；Lua 只能保证 Redis 内一次脚本原子，不能替代跨系统一致性。
 
 ## 常见面试题
 
@@ -382,7 +426,7 @@ flowchart TD
 
 **答**：
 
-**标准结论**：RDB 是全量快照，恢复快、文件小，但两次快照之间可能丢数据；AOF（Append-Only File）记录每次写命令，按 `appendfsync` 策略（always/everysec/no）控制刷盘，`everysec` 最多丢 1 秒。
+**标准结论**：RDB 是全量快照，恢复快、文件小，但两次快照之间可能丢数据；AOF（Append-Only File）记录每次写命令，按 `appendfsync` 策略（always/everysec/no）控制刷盘；`everysec` 通常把恢复点窗口控制在约一个刷盘周期，仍要把故障类型与操作系统缓存纳入演练。
 
 **原理层**：
 - AOF 本质是 WAL（Write-Ahead Log）思想——先记日志再落数据，`everysec` 由后台线程每秒 fsync，兼顾性能与安全。
@@ -390,7 +434,7 @@ flowchart TD
 
 **工程层**：
 - 生产推荐「AOF + 混合持久化」（aof-use-rdb-preamble：AOF 文件头放 RDB 基底 + 尾部增量），重启加载快又不丢太多数据。
-- 更要记住：Redis 永远不是唯一事实源——真数据在 MySQL，Redis 挂了最多丢缓存，这比持久化参数更重要。
+- 更要记住：在本教程的**缓存**用法中，Redis 不是唯一事实源，真数据通常在 MySQL/PG；Redis 也可做持久化存储，但必须另行证明持久化、复制、备份与恢复能满足业务目标，不能把“内存快”误当成数据保证。
 
 ### Q5：主从、哨兵、Cluster 的区别？怎么保证高可用？
 

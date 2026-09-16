@@ -28,7 +28,7 @@
 ### 本讲在解决什么问题
 
 - **问题**：你有 NestJS 底子，Spring 的很多概念其实似曾相识——只是名字、写法不同。本讲把「同一件事的两种写法」对照起来，学得最快。
-- **你要带走的一句话**：**概念是通用的，实现方式不同**。看到 Spring 里不熟的写法，先映射到熟悉的 NestJS 概念，再记差异（隐式/显式、AOP 深度、校验位置）。
+- **你需要明确的点**：**概念是通用的，实现方式不同**。看到 Spring 里不熟的写法，先映射到熟悉的 NestJS 概念，再记差异（隐式/显式、AOP 深度、校验位置）。
 
 ### 速览代码形态示意（非完整工程）
 
@@ -91,7 +91,7 @@ public class UserController {
 | `@Injectable` | `@Service` / `@Component` | 概念一致，Spring 派生注解更多（按分层语义） |
 | 自定义 Provider（useClass / useFactory / 自定义 token，见注） | `@Bean` + `@Qualifier` | 都是「手动注册 + 按名取用」；Spring 用 `@Bean` 方法返回实例、`@Qualifier` 限定注入哪个 |
 | `@Injectable({scope: Scope.REQUEST})` | `@Scope("request")` | 都是「每次请求一个新实例」；Spring 作用域更全（singleton / prototype 等，见注） |
-| `forwardRef`（循环依赖） | `@Lazy` / ObjectProvider | 循环依赖的兜底：Spring 构造注入默认能解（见注），少数场景才用 `@Lazy` / ObjectProvider 延迟获取 |
+| `forwardRef`（循环依赖） | 重构依赖；临时迁移时用 `@Lazy` / `ObjectProvider` | Boot 默认拒绝循环依赖；构造器环无法靠三级缓存解决，`@Lazy` / `ObjectProvider` 只推迟取用时机 |
 | `@Controller` | `@RestController` | 几乎一致 |
 | Middleware | Servlet Filter / OncePerRequestFilter | 都在最外层做横切（日志 / 跨域等）；`OncePerRequestFilter` 保证一次请求只过一遍 |
 | Guard | Filter / Interceptor | Spring 过滤器链更灵活、粒度更细 |
@@ -104,7 +104,7 @@ public class UserController {
 
 > 注：`useClass` / `useFactory` / 自定义 token + `@Inject('TOKEN')` 都是「告诉容器实例怎么建、再按名（token）取」的显式写法。
 > 注：Spring 作用域更全：singleton 单例（默认就一个）/ prototype 每次要都新建 / request 每个 HTTP 请求一个新实例。
-> 注：三级缓存＝解决「A 构造要 B、B 构造要 A」这类循环依赖的缓存机制（先登记半成品引用，让两边都能先拿到对方）；ObjectProvider＝延迟取 Bean 的「取货单」，要时才真去取。
+> 注：三级缓存是 Spring 容器在**允许循环依赖**时，为部分单例 setter / 字段注入环提供早期引用的内部机制；它不能解决「A 构造器要 B、B 构造器要 A」的构造器环。Spring Boot 默认 `spring.main.allow-circular-references=false`，因此无论哪种注入方式，默认都会在启动期拒绝循环依赖。`ObjectProvider` 是延迟取 Bean 的「取货单」；`@Lazy` / `ObjectProvider` 只能作为迁移期拆环手段，长期方案仍是抽出共同职责或调整依赖方向。
 > 注：生命周期回调对应关系看表头即可——`@PostConstruct`／`@PreDestroy`／`InitializingBean` 是三种记忆点（初始化后／销毁前／早期接口式）；Aware 接口族、BeanPostProcessor 是给框架作者的更细粒度扩展点（见第 3 节 ⏸️ 框）。
 
 > **本讲最高价值的图：请求生命周期双栈对照**——上表对的是「名字」，这张图对的是「**位置和顺序**」。同一个 HTTP 请求，两个框架各走一条链：
@@ -228,7 +228,7 @@ export class LogInterceptor implements NestInterceptor {
 }
 ```
 
-> ⚠️ **别把响应式心智带进 Spring MVC**：NestJS 的 Interceptor 返回的是 Observable（RxJS 的异步数据流对象），而 Spring AOP 的对应物返回的是普通 Java 对象——Spring MVC 默认是同步阻塞的，不欢迎也不需要 `pipe` / `tap` 这套响应式包装。什么时候才真正需要响应式？见第 4 讲 WebFlux 的选型判断（绝大多数 CRUD 业务都不需要）。
+> ⚠️ **别把两个 Interceptor 机械等同**：NestJS Interceptor 可直接围绕 Observable 管道组合 `pipe` / `tap`；Spring MVC 的 HandlerInterceptor 与 Spring AOP 分别是请求拦截和 Bean 方法拦截，默认编程模型仍是同步 Servlet 栈。Spring MVC 的 Controller 也能适配 `Mono` / `Flux` 等响应式返回值，但流式响应写出仍有 Servlet 阻塞边界，不能因此把它当成 WebFlux 的端到端非阻塞模型。什么时候需要后者，见第 4 讲的选型判断。
 
 ```java
 // Spring AOP: 切点表达式能指到「任意方法」—— 不止 Controller, Service 内部方法也行

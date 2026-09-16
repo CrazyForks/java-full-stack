@@ -20,11 +20,13 @@
 | 滚动发布 | 逐个替换 Pod 更新 | 不中断服务升级 |
 | HPA | 自动扩缩容 | 按 CPU 加副本 |
 | Ingress Controller | 读取 Ingress 规则并实际转发流量的控制器 | 仅创建 Ingress 资源不会自动产生入口能力 |
+| Pod phase | Pod 生命周期的高层摘要 | `Pending` / `Running`，不是完整故障状态机 |
+| 容器状态与条件 | 单容器状态及 Pod 是否可接流量 | `Waiting` 原因、`Terminated` 退出码、`Ready` 条件 |
 
 ### 本讲在解决什么问题
 
 - **问题**：容器多了不好管——谁来调度、扩缩、自愈、更新？K8s 负责编排：声明「要什么」，它自动让集群变成那个样子。
-- **你要带走的一句话**：**Pod** 是最小运行单元，**Deployment** 管副本，**Service** 提供稳定入口，**Ingress** 对外路由。核心是「声明期望状态，K8s 自动收敛」——你写 YAML 描述"要什么"，K8s 负责"变成那样"。
+- **你需要明确的点**：**Pod** 是最小运行单元，**Deployment** 管副本，**Service** 提供稳定入口，**Ingress** 对外路由。核心是「声明期望状态，K8s 自动收敛」——你写 YAML 描述"要什么"，K8s 负责"变成那样"。
 
 ### 速览形态示意（非完整可部署清单）
 
@@ -281,7 +283,19 @@ sequenceDiagram
 
 ### 5. Spring Boot on K8s 适配清单
 
-#### 5.1 探针语义差异（配错就是事故）
+#### 5.1 Pod phase、容器状态与探针：三类“状态”别混
+
+`kubectl get pods` 的 `STATUS` 适合快速发现问题，却不能替代 API 中的 `status.phase`、`containerStatuses` 和 `conditions`。排障时至少分三层读：
+
+| 观察对象 | 回答的问题 | 典型值/证据 | 不能推出什么 |
+|-|-|-|-|
+| Pod phase | Pod 生命周期的高层摘要 | `Pending`、`Running`、`Succeeded`、`Failed`、`Unknown` | `Running` 不等于每个容器健康，更不等于已接流量 |
+| 容器状态 | 某个容器正在做什么/为何失败 | `Waiting` 的 `ImagePullBackOff`、`Running`、`Terminated` 的退出码与原因 | 单个容器启动不等于整个 Pod Ready |
+| Pod conditions / 探针 | 能否调度、容器是否就绪、是否进入 Service 后端 | `PodScheduled`、`ContainersReady`、`Ready`；readiness/liveness/startup 结果 | `Ready=False` 通常是摘流量，不必然重启 |
+
+例如 `CrashLoopBackOff`、`Terminating` 经常显示在 `kubectl` 的友好 `STATUS` 列中，并不是 Pod phase；遇到它们应执行 `kubectl describe pod <pod>`，看 `State`、`Last State`、`Reason`、退出码和 Events。`Running` 但 `READY` 为 `0/1` 时，优先查 readiness 与依赖，而不是误判为调度失败。[Kubernetes Pod 生命周期文档](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) 明确将 phase 定义为高层摘要，而非完整状态机。
+
+#### 5.2 探针语义差异（配错就是事故）
 
 > 🧩 前置 30 秒：**探针（Probe）= 定时体检**——生活版：保安看「工牌」判断你这秒能不能进大厦（readiness），但工牌过期不该把大楼拆了重盖，只有急救医生摸「脉搏」没了才抢救（liveness）；回到 K8s：kubelet 定时向 `/actuator/health` 发 HTTP「问一句」——问诊失败，处理力度完全不同，见下。
 
@@ -291,15 +305,16 @@ sequenceDiagram
 
 > **经典事故**：liveness 探针配到了依赖下游的接口上——下游抖动 → liveness 失败 → K8s 认为「进程坏了」**把容器反复重启** → 重启期间服务全不可用 → 把「下游部分故障」放大成「本服务全灭」。依赖检查只能给 readiness。
 
-#### 5.2 优雅停机：在途请求不丢的双保险
+#### 5.3 优雅停机：让摘流量、信号和在途请求协同
 
-Pod 被杀时的时序：K8s 先发 `SIGTERM` →（同时）Endpoint 从 Service 摘除。**问题**：摘除是异步的，可能 SIGTERM 都到了、流量还在往这个 Pod 打。双保险：
+Pod 终止涉及端点更新、生命周期 hook、停止信号和应用退出，具体传播时序还会受 Service 数据面、Ingress/网格影响。可靠的核心不是固定“睡 10 秒”，而是：应用收到终止信号后不再接新请求且处理可完成的在途请求；必要时用 `preStop` 给上游摘流量留缓冲，并在真实链路压测验证。
 
 ```yaml
-# 保单一（YAML 侧）：preStop 拖时间 —— 等 Endpoint 传播完成再开始停
+# 可选缓冲：仅在实测确认上游摘流量传播需要时使用。
+# 它占用 terminationGracePeriodSeconds 的总时间预算，不是通用的“睡 10 秒即零丢包”。
 lifecycle:
   preStop:
-    exec: { command: ["sleep", "10"] }   # 拖住 10s：这期间摘流量已传播完，不会再有新请求
+    exec: { command: ["sleep", "10"] }
 ```
 
 ```yaml
@@ -312,10 +327,10 @@ spring:
     timeout-per-shutdown-phase: 30s       # 最多等 30s，超过强制退出
 ```
 
-- **规则**：`preStop` 与 `graceful` 必须成对，缺一不可。
-- **例外（只配一个必出事）**：只有 preStop 没有 graceful → 拖够了时间但停机瞬间仍有在途请求被切；只有 graceful 没有 preStop → 摘流量还没传播就停机，新请求照样撞死。
+- **规则**：graceful shutdown 与足够的 `terminationGracePeriodSeconds` 是应用侧基础；`preStop` 是按实际入口传播延迟决定的附加缓冲，并非所有集群都必须配置。
+- **失败路径**：`preStop` 在 `SIGTERM` 前执行，但 grace period 在 hook 开始前已经计时；hook 过长会挤占应用优雅退出时间，最终仍会被强制终止。只配 sleep 而应用不能优雅退出，或只依赖应用退出却未验证入口摘流量，都可能造成连接中断。发布时观察 5xx、在途请求、连接关闭与终止耗时。
 
-#### 5.3 资源对齐与 HPA
+#### 5.4 资源对齐与 HPA
 
 ```yaml
 # hpa.yaml：按 CPU 自动扩缩（指标来自 Metrics Server）
@@ -337,7 +352,7 @@ spec:
       stabilizationWindowSeconds: 300     # 缩容保守：5 分钟窗口内不连续缩，防抖动
 ```
 
-- JVM 内存与 cgroup 对齐：容器 limits 给 1536Mi，JVM 用 `-XX:MaxRAMPercentage=75.0`（堆约占 1.1G，余量留给元空间 / 线程栈 / 直接内存）——不配的话 JVM 可能按宿主机内存自作主张，直接被 OOM Kill。
+- JVM 内存与 cgroup 对齐：容器 limit 给 1536Mi，JVM 可先用 `-XX:MaxRAMPercentage=75.0`（最大堆约 1152Mi）作为**压测起点**，其余预算留给元空间、代码缓存、线程栈、直接/本地内存与页缓存。现代 JDK 通常读取 cgroup limit，而不是默认按宿主机内存分堆；真正的风险是总 RSS 超过 limit，或老旧/不兼容的 JDK-cgroup 组合读错上限。发布前在目标镜像验证容器感知和峰值 RSS。
 
 ### 6. Helm 与故障排查路径
 
@@ -370,7 +385,7 @@ kubectl logs order-service-7d9f-xyz --previous      # --previous: 看上一次�
 kubectl logs order-service-7d9f-xyz --previous | tail -30
 # 常见结局: ① 启动报连接 DB 失败(配置/Secret) ② OOMKilled(见 describe 里 Reason) ③ 抛异常退出
 kubectl get pod order-service-7d9f-xyz -o jsonpath='{.lastState.terminated.reason}'
-# > OOMKilled   ← limits 内存给小了或 JVM 堆超配
+# > OOMKilled   ← cgroup limit 小于进程总内存峰值（不只看 JVM 堆）
 
 # 场景三：Service 不通（Pod 活着但访问 502/超时）
 kubectl get endpoints order-service
@@ -392,7 +407,7 @@ kubectl get pod -l app=order-service --show-labels    # 核对 Pod 实际标签�
 - **liveness 探依赖接口**：下游故障被放大成自我重启风暴（见 5.1，生产事故 Top 级）。
 - **镜像用 `latest`**：无法回滚到「上一个真正跑过的版本」，且缓存导致「改了不生效」的错觉。
 - **requests 与 limits 不设**：BestEffort 调度 → 资源争抢时最先被驱逐的就是你。
-- **只有 graceful 没有 preStop**（或反过来）：滚动更新仍有少量 502，见 5.2 的双保险论证。
+- **把固定 `preStop: sleep 10` 当成零丢包保证**：它会消耗总终止宽限期，且不证明入口已停止转发；以 readiness、应用 graceful shutdown、足够 grace period 和真实流量验证为准。
 - **HPA 缩容太快**：流量抖动引发「扩了又缩、缩了又扩」，务必配 `stabilizationWindowSeconds`。
 
 ## 本节自检
@@ -400,11 +415,12 @@ kubectl get pod -l app=order-service --show-labels    # 核对 Pod 实际标签�
 - [ ] Pod 一直 Pending，你的排查步骤是什么？（describe → events → 三类原因定位）
 - [ ] liveness 探针配到了一个依赖下游的接口上，会发生什么事故？能完整讲一遍放大链路
 - [ ] Service、Ingress、Spring Cloud Gateway 三层各自解决什么问题？
-- [ ] 滚动更新时怎么保证在途请求不丢？（preStop + graceful 双保险，能说清缺一不可的原因）
+- [ ] 能区分 Pod phase、容器状态和 `Ready` 条件；解释为什么 `Running` 仍可能是 `0/1 Ready`
+- [ ] 滚动更新时怎么降低在途请求中断？能说明 graceful shutdown 是基础、`preStop` 是经实测决定的缓冲，并说出总终止宽限期约束
 - [ ] 能解释 requests 与 limits 的差异（调度依据 vs 运行上限）以及 OOMKilled 的由来
 - [ ] **场景判断**：新版本 Pod 能启动但尚未完成缓存预热，发布时却立即接流量并大量超时；能判断该调整哪类探针，并说明为什么不能用 liveness 代替
 
-> 自检答案要点：用 startup 探针保护启动阶段，用 readiness 探针表达“是否可以接流量”；liveness 只判断是否需要重启，配置过严会把仍在启动或暂时依赖异常的进程反复杀掉。还需结合滚动更新参数和优雅停机验证完整切流过程。
+> 自检答案要点：用 startup 探针保护启动阶段，用 readiness 探针表达“是否可以接流量”；liveness 只判断是否需要重启，配置过严会把仍在启动或暂时依赖异常的进程反复杀掉。`phase=Running` 只说明 Pod 处于运行生命周期，不证明 Ready；结合 `describe` 中的容器状态、conditions、滚动更新参数、入口传播与优雅停机验证完整切流过程。
 
 ## 本节配套思考题
 
@@ -451,7 +467,7 @@ kubectl get pod -l app=order-service --show-labels    # 核对 Pod 实际标签�
   - 切换过程：滚动时新旧 ReplicaSet 并存，Service 的 endpoints 同时挂着新旧 Pod，流量按 readiness 探针逐渐切换。
   - 回滚本质 = 把期望状态改回旧版本，控制器自动收敛，镜像换回去同样走滚动。
 - **工程实践**：
-  - 零中断发布要配齐 readinessProbe（新 Pod 就绪才接流量）+ preStop + graceful shutdown（在途请求不丢）。
+  - 零中断发布先配 readinessProbe（新 Pod 就绪才接流量）+ 应用 graceful shutdown；若实测入口摘流量传播仍需缓冲，再增加 `preStop`，并让三者共同落在足够的终止宽限期内。
   - 发布前看 `rollout status`；出问题 `rollout undo` 比重新构建发布快得多。
   - 加分：回滚不是秒级——它也是一个滚动过程，旧镜像要重新拉取。
 
@@ -475,8 +491,16 @@ kubectl get pod -l app=order-service --show-labels    # 核对 Pod 实际标签�
   - CPU 超限被节流（throttling），内存超限直接 OOM Kill。
 - **底层原理**：
   - requests 参与节点容量计算与 QoS 分级——Pod 按 requests/limits 被分为 Guaranteed（requests=limits）/ Burstable / BestEffort 三档，资源紧张时 kubelet 按 QoS 优先驱逐 BestEffort。
-  - limits 由运行时实现：CPU 用 CFS 配额（节流不杀），内存用 cgroup 限制 + OOM Killer（超了直接杀进程，Pod 显示 OOMKilled，`lastState.terminated.reason` 可查）。
+  - limits 由运行时实现：CPU 用 CFS 配额进行节流；内存限制由 Linux cgroup 记账，内存压力下内核 OOM 机制通常终止容器中的进程，Pod 可显示 `OOMKilled`，`lastState.terminated.reason` 可查。内存超限的终止是反应式的，进程不一定在超限瞬间被杀。
 - **工程实践**：
-  - requests 按稳态用量估（别拍脑袋），limits 留 1.2–1.5 倍余量且必须与 JVM 堆参数联动（如 limits 1536Mi 配 `MaxRAMPercentage=75` 保证堆约 1.1G）。
+  - requests 按稳态用量估（别拍脑袋）；limit 与 JVM 参数必须一起预算。例如 limit=1536Mi、`MaxRAMPercentage=75` 时堆上限约 1152Mi，但约 384Mi 的剩余空间还要由线程数、直接内存、元空间、代码缓存和页缓存的压测峰值证明足够。1.2–1.5 倍不是通用公式，不能替代观测。
   - 全部不设 = BestEffort，集群资源紧张第一个被驱逐；limits 太小 = OOMKilled 循环崩溃。
-  - 加分：OOMKilled 与 Java 抛 `OutOfMemoryError` 不是一回事——前者是 cgroup 杀进程，可能堆都还没满。
+  - 加分：`OOMKilled` 与 Java 抛 `OutOfMemoryError` 不是一回事——前者可能在 JVM 来不及抛异常前终止进程，且 Java 堆未满时也会发生；排查要同时看 cgroup limit、容器 RSS、线程数和直接内存。
+
+### Q6：`kubectl get pods` 显示 Running，为什么服务仍可能没有流量？
+**答**：
+- **标准结论**：`Running` 是 Pod phase 的高层生命周期摘要，不等于容器已 Ready。容器可能在运行但 readiness 失败，`READY` 显示 `0/1`，Service 不会把新流量导向它；也可能是容器 `Waiting`/`Terminated` 的原因导致显示 `CrashLoopBackOff` 等友好状态。
+- **底层原理**：Pod phase、每个容器的 `Waiting`/`Running`/`Terminated` 状态、以及 `PodScheduled`/`ContainersReady`/`Ready` conditions 是不同粒度的 API 字段。`kubectl` 的 `STATUS` 列只为快速阅读而设计，不能替代对 `describe` 和 status 字段的判断。
+- **工程实践**：先看 `kubectl get pod` 的 `READY` 与重启次数，再用 `kubectl describe pod` 查 readiness 事件、容器 `State`/`Last State`、退出码和镜像拉取原因；随后核对 Service selector 与 endpoints。不要因为看到 `Running` 就跳过探针、依赖或 Service 排查。
+
+> 官方依据：[Kubernetes：Pod 与容器资源管理](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)；[Kubernetes：Pod 生命周期](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)；[Kubernetes：容器生命周期 Hook](https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/)；[Oracle `java` 命令参考：`MaxRAMPercentage`](https://docs.oracle.com/en/java/javase/25/docs/specs/man/java.html)。

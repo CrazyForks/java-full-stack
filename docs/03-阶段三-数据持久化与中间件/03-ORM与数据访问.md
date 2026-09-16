@@ -25,7 +25,7 @@
 ### 本讲在解决什么问题
 
 - **问题**：Java 怎么操作数据库？是手写 SQL（MyBatis）、还是操作对象（JPA）、还是类型安全的 SQL（jOOQ）？三者在「SQL 掌控力 ↔ 开发效率」光谱上各有取舍。
-- **你要带走的一句话**：MyBatis-Plus 保留 SQL 控制力，JPA 减少常规对象映射样板，jOOQ 让生成后的表与列参与编译期检查。先选一个作为主数据访问方式；只有迁移、报表等边界明确的场景才引入第二种，并统一事务、审计和缓存边界。
+- **你需要明确的点**：MyBatis-Plus 保留 SQL 控制力，JPA 减少常规对象映射样板，jOOQ 让生成后的表与列参与编译期检查。先选一个作为主数据访问方式；只有迁移、报表等边界明确的场景才引入第二种，并统一事务、审计和缓存边界。
 
 ### 速览形态示意（不是可直接运行的工程）
 
@@ -242,6 +242,12 @@ public class AuditFillHandler implements MetaObjectHandler {
 }
 ```
 
+#### 2.3 MyBatis 缓存：会话复用不是全局缓存
+
+- **一级缓存（local cache）**属于一个 `SqlSession`：默认 `localCacheScope=SESSION`，同一会话里“相同语句 + 相同参数”的再次查询可复用结果；`update`、`commit`、`rollback`、`close` 会清空它。MyBatis-Spring 常把 `SqlSession` 与 Spring 事务绑定，但不能因此把它理解为跨请求或跨事务缓存。
+- 若嵌套查询的对象引用或陈旧结果风险比会话内复用更值得优先控制，可设 `localCacheScope=STATEMENT`，让缓存只在单条语句执行期间使用；它仍保留解决循环引用所需的最小能力。
+- **二级缓存**是 Mapper namespace 级别的可选缓存，不是“打开 MyBatis 就全局共享”。需显式配置 `<cache/>`（并受 `cacheEnabled` 控制）；该 namespace 的新增、修改、删除会刷新缓存。多实例部署时它默认不会替你完成跨节点失效，热点、可变数据和权限相关查询更应先证明一致性与失效策略可控。官方语义见 [MyBatis Local Cache](https://mybatis.org/mybatis-3/java-api.html#local-cache) 与 [MyBatis 二级缓存](https://mybatis.org/mybatis-3/sqlmap-xml.html#cache)。
+
 ### 3. Spring Data JPA
 
 #### 3.1 Repository：方法名即查询
@@ -267,10 +273,10 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 |-|-|-|-|
 | 刚 new 出来，未关联上下文 | 受管：在 `flush` 时由脏检查同步 DB | 上下文关闭后脱管 | 标记删除，flush 时发 DELETE |
 
-- **一级缓存（First-Level Cache，本质就是持久化上下文本身）**：同一持久化上下文里同 ID 只有一个受管实例——事务内重复 `findById` 不打第二条 SQL，脏检查（Dirty Checking）才能把修改统一写回。
+- **一级缓存（First-Level Cache，本质就是持久化上下文本身）**：同一 `EntityManager` / 持久化上下文里同 ID 只有一个受管实例——在同一上下文重复 `findById` 通常不打第二条 SQL，脏检查（Dirty Checking）才能把修改统一写回。Spring 默认把上下文与事务配合使用是常见模式，但缓存边界本身是持久化上下文，不是“任何一次方法调用”。
 - **Hibernate 默认只开一级缓存**；二级缓存（Second-Level Cache，跨会话共享的缓存）默认关闭——这点常被误解为「JPA 自带缓存」而忽略集群失效问题。
 
-**生活版——开会时把发言稿揣兜里**：同一场会里，有人反复问你「刚才那个数字是多少」，你直接掏兜里的稿子念，不用再回办公室翻档案（= 一级缓存命中，不发第二条 SQL）；会议一散，稿子收起来（= 上下文关闭）。**换成 Java**：事务内 `findById` 同 ID 第二次调用直接返回受管实例；一级缓存的生命周期就跟 session / 事务同进退。
+**生活版——开会时把发言稿揣兜里**：同一场会里，有人反复问你「刚才那个数字是多少」，你直接掏兜里的稿子念，不用再回办公室翻档案（= 一级缓存命中，不发第二条 SQL）；会议一散，稿子收起来（= 上下文关闭）。**换成 Java**：同一持久化上下文内 `findById` 同 ID 第二次调用直接返回受管实例；在典型 Spring 事务中它常与事务同进退，但不要把这个常见配置误当作规范定义。
 
 ```mermaid
 flowchart TD
@@ -407,7 +413,7 @@ flowchart TD
 
 - **`${}` 只准出现在排序字段这类白名单**：任何来自用户的值过 `${}` 都是注入入口；页面排序字段用枚举白名单映射。
 - **MyBatis-Plus 的 `last()`**：拼什么进什么，等价 `${}` 纪律。
-- **LAZY 关联在 Controller 里访问**：事务已关闭后再触发加载，可能出现 `LazyInitializationException`（session 已关闭）；在 Service 事务内按查询场景使用 `@EntityGraph` 或 DTO 投影。
+- **LAZY 关联在 Controller 里访问**：事务已关闭后再触发加载，可能出现 `LazyInitializationException`（session 已关闭）。OSIV（Open Session/EntityManager in View）开启时，Controller/序列化阶段**能**继续触发查询，但这不表示**应该**这样做：SQL 会逃出 Service 的事务边界，N+1、响应延迟和错误处理都更难观察。推荐关闭 `spring.jpa.open-in-view`，在 Service 事务内按查询场景用 `@EntityGraph`、JOIN FETCH 或 DTO 投影装配响应；OSIV 仅是兼容性取舍，不是懒加载解药。[Spring Boot：Open EntityManager in View](https://docs.spring.io/spring-boot/reference/data/sql.html)
 - **逻辑删除的盲区**：唯一索引会被「已删数据」占坑（删了又建同 order_no 冲突）——唯一索引要包含 deleted 列或用「删除时间戳」当 deleted 值。
 - **自动填充只对 MP 自己的 INSERT/UPDATE 生效**：手写 XML 的原生 SQL 不会触发填充，混用时要留心。
 - **DTO↔Entity 转换用 MapStruct**（编译期生成转换代码）：别用 `BeanUtils.copyProperties` 反射拷贝——慢，且字段改名不报错、悄悄丢值。
@@ -416,11 +422,12 @@ flowchart TD
 
 - [ ] 能用 MyBatis-Plus 完成单表 CRUD + 分页 + 逻辑删除 + 自动填充，并说清分页拦截器与 `MetaObjectHandler` 各解决什么问题
 - [ ] 能解释 N+1 问题怎么产生，并能选择 `@EntityGraph`、DTO 投影或批量抓取之一；用 SQL 日志或监控核对查询次数
+- [ ] 能说明 MyBatis 一级缓存的 `SqlSession` 范围、何时失效，以及为什么二级缓存必须单独评估跨节点失效与数据陈旧
 - [ ] 能说出三者（MyBatis-Plus / JPA / jOOQ）的主要取舍，并给出一个「主路径 + 有边界例外」的选型理由
 - [ ] 能描述动态数据源路由的实现思路（`AbstractRoutingDataSource` + `ThreadLocal` + AOP）以及 `finally remove` 的原因
 - [ ] 场景题：订单列表既要展示 20 条订单和每单商品数，又不能让 Controller 触发额外查询；写出你的查询方案与验证方法
 
-**核对要点**：场景题可以用 DTO 投影直接返回列表字段，或在事务内用明确的抓取计划一次加载所需关联；不能仅靠把关联改成 `EAGER`。验收时查看 SQL 日志或指标，确认不会随订单数增加而线性增加查询次数。动态数据源的标记必须在连接取得前写入，并在请求结束前清理，写后读还需根据业务一致性要求决定是否强制走主库。
+**核对要点**：场景题可以用 DTO 投影直接返回列表字段，或在事务内用明确的抓取计划一次加载所需关联；不能仅靠把关联改成 `EAGER`，也不能用 OSIV 掩盖 Controller/序列化阶段的懒加载。验收时查看 SQL 日志或指标，确认不会随订单数增加而线性增加查询次数。MyBatis local cache 只在 `SqlSession` 内有效，写入、提交、回滚和关闭都会清空；二级缓存需要显式启用并验证失效。动态数据源的标记必须在连接取得前写入，并在请求结束前清理，写后读还需根据业务一致性要求决定是否强制走主库。
 
 ## 本节配套思考题
 
@@ -499,7 +506,7 @@ flowchart TD
 
 **工程实践**：
 - Controller 层不要碰实体的关联属性——要么在 Service 事务内用 `@EntityGraph` 预加载，要么用 DTO 投影返回。
-- 把 `open-in-view: true` 当解药是错的：它只是把事务生命周期延长到视图渲染，连接被占满，高并发直接打爆连接池。
+- 把 `open-in-view: true` 当解药是错的：OSIV 延长的是 EntityManager / Session 可用范围，不等于把业务事务本身延长到视图渲染；它会允许 Controller 或 JSON 序列化阶段继续发 SQL，使访问模式和 N+1 更隐蔽。关闭后在 Service 事务内完成 DTO 装配，能把查询边界和失败路径留在可测试的位置。
 
 **常见误区**：以为加了 `fetch = EAGER` 就一劳永逸——急加载会让不需要关联的查询也带 JOIN，SQL 膨胀；正确做法是按查询场景决定加载策略。
 

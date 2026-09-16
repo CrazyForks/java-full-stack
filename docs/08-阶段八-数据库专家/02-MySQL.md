@@ -46,9 +46,13 @@ SELECT id, username, phone FROM `user` WHERE phone = '13800000000';  -- 只取�
 ```sql
 -- 建索引: 加速 WHERE user_id AND status 的查询
 CREATE INDEX idx_user_status ON `order` (user_id, status);   -- 联合索引
--- 查看这条查询是否用上索引
+-- 情形 A：条件匹配联合索引；实际计划仍以当前数据分布和统计信息为准
 EXPLAIN SELECT id, status FROM `order` WHERE user_id = 10086 AND status = 1;
--- key=idx_user_status (用上了) ; type=ALL (全表扫, 慢)
+-- 可能看到 key=idx_user_status、type=ref；id/status 都在索引中时 Extra 还可能为 Using index
+
+-- 情形 B：假设 users.phone 没有索引，则不能期待它使用 idx_user_status
+EXPLAIN SELECT id, username FROM `user` WHERE phone = '13800000000';
+-- 常见结果：key=NULL、type=ALL；这是另一个“无合适索引”的查询，需先核对真实执行计划再决定是否建索引
 ```
 
 | 概念 | 说明 | 该怎么做 |
@@ -121,6 +125,7 @@ public void transfer(Long fromId, Long toId, BigDecimal amt) {
 > - **redo log（重做日志）**：**WAL（Write-Ahead Log，预写日志）**思想——先写 redo 日志再改数据页，崩溃后重放 redo 恢复，保证事务持久性（对应 `innodb_flush_log_at_trx_commit` 的刷盘策略）。
 > - **undo log** 还承担回滚：事务失败时按 undo 逆操作恢复。
 > - **一句话分工**：redo 保「持久」（崩溃重做）、undo 保「回滚与 MVCC」（撤销版本）、binlog 做「复制与恢复」（逻辑日志，主从复制时从库照着它重放）。
+> - **学习回链**：[阶段三的 MySQL 章节](../03-阶段三-数据持久化与中间件/01-MySQL内核与SQL优化.md)已建立 redo / undo / binlog 与崩溃恢复的最低闭环；这里把它们放进 Read View、刷盘策略和复制诊断中深化，避免把同一结论重复背两遍。
 
 > 🧩 **生活版类比（MVCC 快照读）**：出版社开印前给作者发一张「定稿清单」——作者按清单读稿，别人随后改的内容统一看不到；只有改完、登记进清单的版本才可见。**换回 MySQL**：清单就是 **Read View**，「登记在册的活跃事务」相当于「正在改稿的人」；行数据用回滚指针串成一串版本，读的人按清单挑版本、不排队，只有「正在改稿的人」才需要加锁——这就是「读不加锁、读写不互斥」。
 
@@ -189,7 +194,7 @@ innodb_flush_log_at_trx_commit = 1  # 1=每次提交都刷盘(数据最安全); 
 > **该怎么做**：`innodb_buffer_pool_size` 是 InnoDB 的关键缓存参数，具体大小要结合同机进程、工作集和压测确定；日志刷盘 `=1` 提供更强的提交持久性，`=2` 在操作系统或主机故障时可能丢失最近一段已提交事务，适用性由 **RPO（故障时最多可接受丢失的数据时长）** 决定。
 > **不该怎么做**：盲目调低 `flush_log_at_trx_commit` 换性能——`=0` 会丢更多（MySQL 崩溃也丢最近秒），对资金类业务风险大。
 
-> ⏸️ **短期可以不学**：InnoDB 内核级调优——redo/undo 表空间大小、双写缓冲（doublewrite）、`innodb_buffer_pool_instances`、自适应哈希索引等参数细节。**何时回来学**：线上出现 IO/写入瓶颈、需要做 DBA 级深度调优时。**面试最低要求**：能说出「`innodb_buffer_pool_size` 是性能核心（占内存 60-70%）、`flush_log_at_trx_commit` 三种取值的可靠性」即可。
+> ⏸️ **短期可以不学**：InnoDB 内核级调优——redo / undo 表空间、doublewrite、`innodb_buffer_pool_instances`、自适应哈希索引等细节。**何时回来学**：线上出现 I/O 或写入瓶颈，需要做 DBA 级调优时。**面试最低要求**：知道 Buffer Pool 是核心缓存，但大小必须为操作系统、连接、排序 / 临时内存和同机进程留余量；“物理内存 60%～70%”只能作为专用数据库机的历史起点，不能套到容器或混部环境。能说明 `innodb_flush_log_at_trx_commit` 各取值的持久性取舍即可。[MySQL 8.4：InnoDB 启动配置](https://dev.mysql.com/doc/refman/8.4/en/innodb-init-startup-configuration.html)
 
 ### 5. 表结构变更用 Flyway（生产禁止手工 DDL）
 ```text
@@ -315,8 +320,11 @@ public Order create(...) {
 - [ ] 能搭建主从复制（GTID），并处理读写分离的主从延迟问题
 - [ ] 能用「索引 → 冷热 → 读写分离 → 分库分表」设计单表 5000w 的演进路线
 - [ ] 场景：订单写入后必须立即展示，报表允许延迟 30 秒。能给出读主/读副本的路由规则，并说明触发分片前还要测哪些指标。
+- [ ] 场景：事务 T1 先更新订单 A 再更新 B，T2 反过来更新，出现死锁。能先保留 SQL、事务 ID 与 `SHOW ENGINE INNODB STATUS` 中的死锁证据，再只重试被回滚且幂等的事务；修复优先统一加锁顺序、缩短事务，而不是盲目无限重试。
 
 > **核对要点**：订单提交后的关键读应路由到主库或具备读己之写保证的路径；报表可在可监控复制延迟范围内读副本。是否分片要看写入、索引、存储、延迟、热点和扩容演练，而不是单表行数。
+>
+> **死锁回链与边界**：[阶段三的死锁定位与重试说明](../03-阶段三-数据持久化与中间件/01-MySQL内核与SQL优化.md)讲基础现象；本阶段要求把它变成线上判断：先取证，再确认重试是否幂等，最后从一致加锁顺序和事务范围消除冲突。InnoDB 会检测死锁并回滚其中一个事务，应用仍要处理返回的失败。[MySQL：InnoDB deadlock](https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks.html)
 
 ## 常见面试题
 
@@ -369,7 +377,7 @@ public Order create(...) {
 
 **工程实践**：
 - `innodb_flush_log_at_trx_commit=1` 每次提交刷 redo 最安全。
-- 资金类业务标配「双 1」配置（sync_binlog=1 + flush_log=1），崩溃恢复时间主要取决于 redo 总量。
+- 对持久性目标较高的链路，常评估「双 1」（`sync_binlog=1` + `innodb_flush_log_at_trx_commit=1`）；它是风险/延迟取舍，不替代备份、恢复演练和业务幂等设计。
 
 ### Q5：慢 SQL 怎么排查？EXPLAIN 看哪几列？
 

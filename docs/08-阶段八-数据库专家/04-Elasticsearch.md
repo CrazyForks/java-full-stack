@@ -1,7 +1,7 @@
 # Elasticsearch：从基础到资深进阶
 
 > 所属：阶段八 数据库专家
-> 定位：Elasticsearch 是**全文搜索引擎 + 日志/分析引擎**，核心是倒排索引 + 分词 + 聚合。适合「搜索、日志分析、复杂聚合」场景。**记住一条红线：ES 是检索加速层，不是 OLTP 主库**——业务真相存 MySQL/PG，ES 只做搜索和分析。
+> 定位：Elasticsearch 是**全文搜索引擎 + 日志/分析引擎**，核心是倒排索引 + 分词 + 聚合。适合「搜索、日志分析、复杂聚合」场景。**记住一条红线：ES 是检索加速层，不是 OLTP 主库**——在本讲的关系型交易场景，MySQL/PG 保存业务事实，ES 只做可重建的搜索和分析视图；文档模型满足不变量、留存与恢复要求时，MongoDB 等也可以承担自己的事实源。
 
 ## 快速入门（能跑）
 
@@ -42,12 +42,14 @@ public class ProductSearch {
 ```
 
 > **运行前提**：这是可嵌入 Spring Boot 应用的查询片段，不是独立 `main` 程序。需引入与 ES 服务端兼容的 Java Client、配置 `ElasticsearchClient` Bean、创建 `products` 索引及下文 mapping；`Product` 是与返回 JSON 对应的 POJO/record，示例省略其字段定义。若只想验证 DSL，先用下文的 JSON 请求在 Dev Tools 执行。
+>
+> **客户端通信边界**：这里的官方 Java API Client 通过 HTTP transport 与 ES 节点通信。当前官方文档的默认 transport 是基于 Apache HttpClient 5 的 `Rest5Client`（旧版可见基于 HttpClient 4 的 `RestClient`）；服务端内部使用什么网络组件，不等于 Java REST 客户端也使用它。引入依赖时按所用 ES 与客户端版本的官方兼容说明配置，不能从服务端的 Netty 架构反推客户端底层。[Elastic：Java client transport](https://www.elastic.co/docs/reference/elasticsearch/clients/java/transport)
 
 > **代码备注（逐行解释）**：
 > - `client.search(...)`：发起搜索请求。
 > - `.index("products")`：指定在哪个「索引」里搜（≈表）。
 > - `.bool(...)`：**bool 查询**用来组合条件；`must`（必须满足，算分≈AND）、`filter`（精确过滤，不算分）。
-> - `.match(field("name").query(keyword))`：**全文匹配**——按分词找，智能匹配同义词/词形。
+> - `.match(field("name").query(keyword))`：**全文匹配**——查询文本也会经过字段的搜索分析器，再按词项匹配；同义词、词干等能力要显式配置相应 analyzer，中文不会自动获得这些效果。
 > - `.term(field("status").value("1"))`：**精确匹配**（≈`WHERE status='1'`），走 filter 不算分更快；`keyword` 字段要传字符串。
 > - 对比 SQL：ES 用 JSON DSL 表达「过滤+全文检索+排序+聚合」，在复杂搜索上远比 `LIKE` 强大。
 
@@ -75,7 +77,6 @@ flowchart LR
 
 > **该怎么做**：中文先用真实查询词评估分词器；IK 是常见插件之一，不是 ES 内置或唯一方案。索引端与搜索端可相同，也可有意采用不同粒度（如索引 `ik_max_word`、搜索 `ik_smart`），关键是用召回率、误召回与运营词典验证，而不是机械地追求一致。
 > `text` 字段做全文、`keyword` 字段做精确/排序。分词器和插件的可用性以所用 ES 版本及官方/插件兼容矩阵为准。
-> `text` 字段做全文、`keyword` 字段做精确/排序。
 
 > ⏸️ **短期可以不学**：倒排索引的内核实现——term dictionary（词表，记录有哪些词、词指向哪个文件块）的 FST 压缩、posting list（词下的文档号列表）的 Roaring Bitmap、段（segment，一次 refresh 生成的可独立检索小文件）合并细节。**何时回来学**：做 ES 内存/查询性能深度优化、或开始读 ES 源码时。**面试最低要求**：说出「倒排索引 = 词 → 文档列表，靠 term dictionary 定位词、posting list 存文档号」即可。
 
@@ -86,6 +87,7 @@ PUT /products
   "mappings": {
     "properties": {
       "name": { "type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart" },   // 索引用 ik_max_word、搜索用 ik_smart（见上）
+      "product_id": { "type": "keyword" },
       "price": { "type": "double" },
       "status": { "type": "keyword" },                          // 精确匹配/排序
       "created_at": { "type": "date" }
@@ -102,14 +104,30 @@ PUT /products
 
 ```mermaid
 flowchart LR
-    A["写入请求"] --> B["内存 buffer + translog<br/>此刻搜不到"]
-    B -->|"refresh（由 refresh_interval 或搜索触发）"| C["生成可搜索的 segment<br/>随后可被搜索看到"]
-    C -->|"flush / Lucene commit"| D["提交已落盘的 segment<br/>按代际清理 translog"]
+    A["写入请求"] --> B["内存 buffer + translog<br/>默认 request 确认前 fsync translog"]
+    B -->|"refresh（按间隔或请求触发）"| C["打开新搜索视图<br/>文档变得可搜索"]
+    B -->|"flush / Lucene commit（后台）"| D["提交 Lucene 段<br/>启动新的 translog generation"]
 ```
 
-> **类比一下（账本 vs 货仓）**：生活版——下单的快递信息先记进「记账本」（translog），货还在仓里没出库，别人查不到；仓库每整点把待发单子统一打包出库（refresh），出库后快递单号才查得到；下班前财务把出库记录正式归档入册（flush）。换成 ES——对应写 buffer+translog、按批 refresh 成段、最后 flush 落盘，把「每条写入都随机写盘」换成批量写盘。
+> **类比一下（账本 vs 货仓）**：生活版——下单的快递信息先记进可恢复的「记账本」（translog）；仓库定时把最新货架打开给查询员看（refresh），于是快递单号可查；财务再按批正式归档货架记录（flush / Lucene commit）。换成 ES：**可搜索**由 refresh 决定，**已确认写入的故障恢复**由 translog 持久化策略决定，flush 负责把已提交的段归档并切换 translog 代际，三者不是同一件事。
 
-> **为什么这么设计**：refresh 批量生成 segment，避免每条写入都立即变成可搜索段；translog 用于故障恢复。Elastic Stack 中 `index.refresh_interval` 默认是 `1s`，但未显式设置时，搜索空闲超过 `index.search.idle.after`（默认 `30s`）的分片会暂停后台 refresh，下一次搜索可能触发 refresh；Serverless 的默认值又不同。因而「约 1 秒可见」只是常见配置下的估计，不能作为业务承诺。[官方索引设置](https://www.elastic.co/docs/reference/elasticsearch/index-settings/index-modules)
+> **为什么这么设计**：refresh 批量打开新的搜索视图，避免每条写入都立即付出可见性成本；translog 用于故障恢复。默认 `index.translog.durability=request` 时，ES 在主分片和已分配副本的 translog 成功 `fsync` 后才确认写请求；若显式改成 `async`，最近一次同步后的**已确认写入**在故障时可能丢失。Elastic Stack 中 `index.refresh_interval` 默认是 `1s`，但未显式设置时，搜索空闲超过 `index.search.idle.after`（默认 `30s`）的分片会暂停后台 refresh，下一次搜索可能触发 refresh；Serverless 的默认值又不同。因而「约 1 秒可见」只是常见配置下的估计，不能作为业务承诺。[官方索引设置](https://www.elastic.co/docs/reference/elasticsearch/index-settings/index-modules) / [translog 持久化](https://www.elastic.co/docs/reference/elasticsearch/index-settings/translog)
+
+### 3. 相关度排序：先看 `_score`，再回看 BM25
+
+```json
+GET /products/_search
+{
+  "query": { "match": { "name": "无线耳机" } },
+  "sort": [
+    { "_score": "desc" },
+    { "created_at": "desc" },
+    { "product_id": "asc" }
+  ]
+}
+```
+
+> `_score` 是本次查询下的文本相关度，不是商品质量、价格或跨查询可比较的固定分数。上述排序先按相关度，再用上架时间和唯一 ID 做稳定的业务兜底；前端的“搜索结果排序”只消费这个顺序，不能把 `_score` 存为业务事实。相关度默认采用 BM25；公式、词频/逆文档频率和长度归一化已在[阶段三的 ES 基础](../03-阶段三-数据持久化与中间件/06-Elasticsearch与定时任务.md)讲解，本阶段只要求能排查：查询意图 → analyzer → `bool` 权重 → 相似度配置，而不是重复背公式。[Elastic：相似度设置](https://www.elastic.co/docs/reference/elasticsearch/index-settings/similarity)
 
 ## 进阶
 
@@ -214,12 +232,12 @@ GET /_cluster/health
 | 商品/文档全文搜索 | ES（倒排索引+分词） | MySQL `LIKE %xx%` 硬扛 |
 | 日志分析 | ES 索引 + 冷热分层（ILM） | 日志塞 MySQL |
 | 复杂聚合统计 | ES `aggs` | 拉全量到内存算 |
-| 核心交易数据 | MySQL（唯一事实源） | ES 当主库（无事务、准实时） |
+| 关系型核心交易数据 | MySQL/PG（该交易模型的事实源） | ES 当主库（缺少通用 OLTP 多文档 ACID 边界、搜索近实时） |
 | 数据量小无分词 | MySQL LIKE + 索引就够 | 为「显得专业」上 ES |
 
 ## 红线小结（必背）
 
-1. **ES 是检索/分析引擎**：核心业务数据存 MySQL/PG，ES 只做搜索和聚合。
+1. **ES 是检索/分析引擎**：关系型交易场景的业务事实存 MySQL/PG，ES 只做可重建的搜索和聚合；若 MongoDB 等被设计为事实源，也同样不能由 ES 取代。
 2. **`text` 与 `keyword` 分清**：全文用 text，精确/排序/聚合通常用 keyword 或其他支持 doc_values 的字段。
 3. **连续深遍历用 `search_after`**：它避免 `from` 累积开销，但仍需稳定排序、控制每页开销；导出配 PIT。
 4. **中文分词先评估**：IK 是常见插件，不是默认或唯一方案。
@@ -233,6 +251,7 @@ GET /_cluster/health
 - [ ] 能说清倒排索引与 MySQL B+ 树索引的本质区别
 - [ ] 能写出一个 `bool` 查询（must + filter）并解释 match/term 差异
 - [ ] 能说清 `text` vs `keyword` 的适用场景与双字段做法
+- [ ] 能解释 `_score` 只表示同一次文本查询中的相关度，且能为“相关度 + 时间 + 唯一 ID”写出稳定排序
 - [ ] 能解释深分页为什么慢、为什么 `search_after` 能解决
 - [ ] 能用索引模板统一日志索引 + 别名切换 + ILM 冷热分层
 - [ ] 能说清主分片/副本分片的作用，以及为什么主分片数应在创建前规划
@@ -261,12 +280,12 @@ GET /_cluster/health
 
 **答**：
 
-**标准结论**：写入先进入内存与 translog，refresh 后生成可搜索 segment，所以搜索可见性通常会滞后于写入（NRT）。Elastic Stack 常见默认 refresh 间隔是 `1s`，但空闲分片和 Serverless 的行为不同，不能把 1 秒当承诺。
+**标准结论**：写入先进入内存与 translog；refresh 后新文档才对搜索可见，所以搜索可见性通常滞后于写入（NRT）。默认 `translog.durability=request` 时，确认写的故障恢复依赖 translog `fsync`，而不是等待 refresh；改成 `async` 才会扩大已确认写的故障窗口。Elastic Stack 常见默认 refresh 间隔是 `1s`，但空闲分片和 Serverless 的行为不同，不能把 1 秒当承诺。
 
 **底层原理**：
-- translog 是 WAL（Write-Ahead Log）——每次写入先记 translog 防宕机丢数据。
-- refresh 把 buffer 批量转成 segment，避免逐条随机写盘（LSM 批量合并思想，用批量换吞吐）。
-- flush（commit）才把 segment 落盘并清空 translog。
+- translog 是 WAL（Write-Ahead Log）——默认 `request` 策略在确认前持久化它；`async` 为吞吐换来同步间隔内的故障窗口。
+- refresh 打开能搜索到新段的视图，只解决“查不查得到”，不等于 `fsync` 或事务提交。
+- flush 触发 Lucene commit 并开始新的 translog generation，用于控制恢复时的重放量；它不应被讲成每条写入的确认前提。
 
 **工程实践**：对可见性要求高的场景可以按压测结果调整 `refresh_interval`，或谨慎使用 refresh API；两者都会影响写吞吐。先区分「能否搜索到」与「交易是否已经可靠提交」，核心交易仍应以 OLTP 主库为准。
 
@@ -305,10 +324,10 @@ GET /_cluster/health
 **标准结论**：双写 / MQ 异步 / Canal（binlog 订阅）三种，生产推荐 MQ 异步 + 对账补偿。
 
 **底层原理**：
-- ES 没有 ACID 事务，写入是近实时、刷盘靠 refresh/flush——当主库意味着「刚写的读不到、宕机可能丢」。
+- ES 缺少通用 OLTP 的多文档 ACID 事务边界，搜索可见性由 refresh 决定；这足以使它不适合充当关系型交易主库。默认 translog `request` 已确认写可用于故障恢复，只有显式采用 `async` 等配置时才有对应的确认写丢失窗口，不能把 refresh/flush 一概说成“宕机必丢”。
 - ES 的强项是倒排检索而不是 OLTP 点查。
 
 **工程实践**：
-- 以 MySQL 为唯一事实源，写操作只动 MySQL，通过 MQ 异步同步 ES，消费失败重试 + 定时对账补偿兜底。
+- 在关系型交易场景，以 MySQL/PG 为事实源，写操作只动事实源，通过 MQ 异步同步 ES，消费失败重试 + 定时对账补偿兜底；若业务选择 MongoDB 作为文档事实源，职责划分相同：ES 仍是派生检索视图。
 - Canal 订阅 binlog 无侵入但要部署维护。
 - **面试高频追问**「一致性怎么保证」——回答最终一致 + 对账，而不是承诺强一致。

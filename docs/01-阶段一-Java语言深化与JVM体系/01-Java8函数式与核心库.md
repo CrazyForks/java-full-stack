@@ -23,7 +23,7 @@
 ### 本讲在解决什么问题
 
 - **问题**：以前用 `for` 循环 + `if` 一层层处理集合，代码又长又易错。Java 8 引入函数式 + Stream，让你能用「声明式」写法处理数据：**「要什么」而不是「怎么遍历」**。
-- **你要带走的一句话**：`list.stream().filter(...).map(...)` 是一条**流水线**——中间操作只是「登记」，真正开始跑是遇到**终端操作**（`collect` / `forEach` / `count`）那一刻。这也是你写 React 时 `array.filter().map()` 的 Java 版本。
+- **你需要明确的点**：`list.stream().filter(...).map(...)` 是一条**流水线**——中间操作只是「登记」，真正开始跑是遇到**终端操作**（`collect` / `forEach` / `count`）那一刻。这也是你写 React 时 `array.filter().map()` 的 Java 版本。
 
 ### 最简可运行示例（照抄能跑）
 
@@ -185,7 +185,7 @@ List<String> result = names.stream()
      .collect(Collectors.toList());
 
 System.out.println(result);
-// 输出: [ALICE, BOB, CHARLIE, DAVE]（Bob/Dave 各 4 个字符 > 3，都被保留）
+// 输出: [ALICE, CHARLIE, DAVE]（Bob 长度为 3，被 filter 排除；Dave 长度为 4，被保留）
 ```
 
 > **为什么中间操作是惰性的**：Stream 是「拉取式」（pull-based）流水线——运行方向是「终端往回要」，不是「源头往前推」。元素不是每个操作各扫一遍，而是**逐个流过整条链**（filter 放行 → map 转换 → collect 收下）；直到终端操作出现，才开始「拉」第一个元素——在此之前，中间操作都只是「登记」，一行不跑。
