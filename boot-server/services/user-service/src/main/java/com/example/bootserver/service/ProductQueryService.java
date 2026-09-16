@@ -29,6 +29,12 @@ public class ProductQueryService {
         this.skuMapper = skuMapper;
     }
 
+    /** 商品上下文提供给库存管理的只读契约：草稿或下架 SKU 仍可配置库存。 */
+    @Transactional(readOnly = true)
+    public boolean hasSkuById(Long skuId) {
+        return skuMapper.selectById(skuId) != null;
+    }
+
     /** 按主键稳定排序后分页，避免不同请求的记录顺序漂移。 */
     @Transactional(readOnly = true)
     public ProductPageResponse listProductsByPage(long page, long size) {

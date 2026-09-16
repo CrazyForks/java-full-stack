@@ -154,6 +154,17 @@ CREATE TABLE IF NOT EXISTS t_sku (
 
 CREATE INDEX IF NOT EXISTS idx_sku_product_id ON t_sku (product_id);
 
+-- 一个 SKU 对应一行库存；未配置库存的 SKU 不预建记录，首次设置时插入。
+-- 外键默认 RESTRICT，SKU 仍有库存记录时禁止物理删除；条件更新与检查约束共同守住可用量非负。
+CREATE TABLE IF NOT EXISTS t_stock (
+    sku_id       BIGINT PRIMARY KEY,
+    total_count  BIGINT NOT NULL DEFAULT 0,
+    locked_count BIGINT NOT NULL DEFAULT 0,
+    update_time  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_stock_sku FOREIGN KEY (sku_id) REFERENCES t_sku (id),
+    CONSTRAINT ck_stock_counts CHECK (total_count >= 0 AND locked_count >= 0 AND locked_count <= total_count)
+);
+
 -- 购物车以用户 + SKU 为唯一业务身份；用户/SKU 的物理删除受外键限制，逻辑删除不清空学习数据。
 CREATE TABLE IF NOT EXISTS t_cart_item (
     id          BIGINT AUTO_INCREMENT PRIMARY KEY,
