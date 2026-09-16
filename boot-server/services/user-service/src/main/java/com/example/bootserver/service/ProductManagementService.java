@@ -16,7 +16,6 @@ import com.example.bootserver.mapper.SkuMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,12 +43,7 @@ public class ProductManagementService {
 
         List<CreatedProductResponse.CreatedSkuResponse> createdSkus = new ArrayList<>();
         for (CreateSkuRequest item : request.skus()) {
-            assertNonNegativePrice(item.price());
-            Sku sku = new Sku();
-            sku.setProductId(product.getId());
-            sku.setSkuCode(item.skuCode());
-            sku.setPrice(item.price());
-            sku.setVersion(0);
+            Sku sku = Sku.create(product.getId(), item.skuCode(), item.price());
             skuMapper.insert(sku);
             createdSkus.add(new CreatedProductResponse.CreatedSkuResponse(
                     sku.getId(), sku.getSkuCode(), sku.getVersion()));
@@ -60,7 +54,6 @@ public class ProductManagementService {
     /** 乐观锁插件以请求版本加入 UPDATE 条件，受影响行数为 0 即并发冲突。 */
     @Transactional
     public SkuPriceResponse updateSkuPrice(Long id, UpdateSkuPriceRequest request) {
-        assertNonNegativePrice(request.price());
         Sku existing = skuMapper.selectById(id);
         if (existing == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "SKU 不存在");
@@ -68,7 +61,7 @@ public class ProductManagementService {
 
         Sku update = new Sku();
         update.setId(id);
-        update.setPrice(request.price());
+        update.changePrice(request.price());
         update.setVersion(request.version());
         update.setUpdateTime(LocalDateTime.now());
         if (skuMapper.updateById(update) == 0) {
@@ -96,11 +89,5 @@ public class ProductManagementService {
             throw new BusinessException(ErrorCode.NOT_FOUND, "商品不存在");
         }
         return new ProductStatusResponse(id, update.getStatus());
-    }
-
-    private void assertNonNegativePrice(BigDecimal price) {
-        if (price == null || price.signum() < 0) {
-            throw new BusinessException(ErrorCode.PARAMETER_ERROR, "价格不能为负数");
-        }
     }
 }
