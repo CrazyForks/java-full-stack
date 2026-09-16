@@ -1,6 +1,6 @@
 # 后端实现导航树
 
-按真实目录定位代码：`controller` 负责 HTTP（请求与响应）契约，`service` 负责业务规则，`mapper` 访问数据库，`entity` 映射表；安全、配置和异常处理在各自的包中。卡片状态以[实践计划与进度](实践计划/README.md)为准。
+按真实目录定位代码：既有商品与用户功能按 `controller/service/mapper/entity` 分包；购物车按业务上下文分包，在内部区分 Web、应用、领域和基础设施。卡片状态以[实践计划与进度](实践计划/README.md)为准。
 
 ```text
 boot-server/
@@ -17,6 +17,15 @@ boot-server/
         ├── main/
         │   ├── java/com/example/bootserver/
         │   │   ├── BootServerApplication.java  启动入口
+        │   │   ├── cart/                      购物车上下文
+        │   │   │   ├── web/CartController.java、AddCartItemRequest.java、UpdateCartItemRequest.java、CartItemResponse.java
+        │   │   │   │   仅认证接口；数量请求校验与现价响应
+        │   │   │   ├── application/CartService.java、CartWriteStepService.java
+        │   │   │   │   加购重试编排；每个原子写步骤独立事务
+        │   │   │   ├── domain/CartQuantity.java、CartItemRepository.java、CartEntry.java
+        │   │   │   │   数量不变式、仓储端口与只读条目
+        │   │   │   └── infrastructure/CartItemEntity.java、CartItemMapper.java、CartItemRow.java、MyBatisCartItemRepository.java
+        │   │   │       条件累加、唯一键插入、本人数据过滤与关联现价查询
         │   │   ├── controller/                HTTP 入口与接口数据对象（DTO）
         │   │   │   ├── AuthController.java     注册、登录并签发 JWT（登录令牌）
         │   │   │   ├── UserController.java     当前用户与后台用户管理
@@ -42,7 +51,7 @@ boot-server/
         │   │   │   └── Product.java、Sku.java   商品状态、逻辑删除、version（改价版本）；
         │   │   │       金额使用 BigDecimal（精确十进制）
         │   │   ├── security/                  JWT 认证与 RBAC（基于角色的权限控制）
-        │   │   │   ├── SecurityConfig.java     商品读取需登录；写入需 product:manage
+        │   │   │   ├── SecurityConfig.java     商品读取与购物车需登录；商品写入需 product:manage
         │   │   │   ├── JwtAuthenticationFilter.java、JwtTokenService.java、UserAuthorityService.java
         │   │   │   │   验证令牌和当前账号状态，每次请求从数据库加载权限
         │   │   │   ├── RestAuthenticationEntryPoint.java、RestAccessDeniedHandler.java
@@ -60,10 +69,12 @@ boot-server/
         │   │   └── exception/UserNotFoundException.java 用户不存在语义
         │   └── resources/
         │       ├── application.yml           数据源、JWT、MVC 路径等运行配置
-        │       └── db/schema.sql             用户/RBAC、商品/SKU 表与幂等种子；
-        │           状态、价格、唯一编码和外键约束
+        │       └── db/schema.sql             用户/RBAC、商品/SKU、购物车表与幂等种子；
+        │           数量范围、状态、价格、唯一编码和外键约束
         └── test/
             ├── java/com/example/bootserver/
+            │   ├── cart/domain/CartQuantityTest.java  数量边界
+            │   ├── cart/web/CartIntegrationTests.java  真实 HTTP、并发累加与本人隔离
             │   ├── controller/              HTTP 契约与授权
             │   │   ├── AuthControllerWebTests.java、UserControllerWebTests.java
             │   │   ├── ProductQueryIntegrationTests.java

@@ -154,6 +154,20 @@ CREATE TABLE IF NOT EXISTS t_sku (
 
 CREATE INDEX IF NOT EXISTS idx_sku_product_id ON t_sku (product_id);
 
+-- 购物车以用户 + SKU 为唯一业务身份；用户/SKU 的物理删除受外键限制，逻辑删除不清空学习数据。
+CREATE TABLE IF NOT EXISTS t_cart_item (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id     BIGINT NOT NULL,
+    sku_id      BIGINT NOT NULL,
+    quantity    INT NOT NULL,
+    create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_cart_item_user FOREIGN KEY (user_id) REFERENCES t_user (id),
+    CONSTRAINT fk_cart_item_sku FOREIGN KEY (sku_id) REFERENCES t_sku (id),
+    CONSTRAINT uk_cart_item_user_sku UNIQUE (user_id, sku_id),
+    CONSTRAINT ck_cart_item_quantity CHECK (quantity BETWEEN 1 AND 999)
+);
+
 INSERT INTO t_product (name, description, status)
 SELECT 'BootMall 入门手册', '用于验证商品与 SKU 数据模型', 'ON_SALE'
 WHERE NOT EXISTS (SELECT 1 FROM t_product WHERE name = 'BootMall 入门手册');

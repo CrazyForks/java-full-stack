@@ -43,6 +43,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PUT, "/products/*/status", "/skus/*/price")
                         .hasAuthority(PermissionCodes.PRODUCT_MANAGEMENT)
                         .requestMatchers(HttpMethod.GET, "/products", "/products/**").authenticated()
+                        // 购物车始终使用 JWT 主体身份；不允许客户端指定或访问其他用户的数据。
+                        .requestMatchers("/cart", "/cart/**").authenticated()
                         // 用户资源属于后台管理面：创建、查询、更新、删除都必须具备稳定权限码。
                         .requestMatchers("/users/**").hasAuthority(PermissionCodes.USER_MANAGEMENT)
                         .anyRequest().authenticated())
