@@ -2,23 +2,24 @@
 
 > 所属：阶段二 Spring 生态与 Web 开发核心
 > 定位：Boot 的价值是「约定优于配置」——**理解自动装配后，它就从「魔法」变成「可以推理的系统」**：为什么引一个 starter 就有了数据源？为什么改个 yml 前缀就能连上别的 Redis？答案都在本讲。
-> 版本基线：Boot 4 = Framework 7 = Jakarta EE 11 基线；starter 模块化细分、引入 JSpecify（标「这个参数/返回值可能为 null 还是非 null」的注解规范，配合静态检查在编译期抓空指针）空安全标注等——具体升级差异以官方迁移指南为准。
+> 版本基线：示例面向 Boot 4.x。以当前官方系统要求为准，Boot 4.1 要求 Java 17+ 与 Spring Framework 7.0.9+，支持 Servlet 6.1 容器；4.x 小版本的依赖与迁移差异应查阅 [Spring Boot 系统要求](https://docs.spring.io/spring-boot/system-requirements.html)。JSpecify 用于表达可空性，能配合静态检查发现空值风险。
 
 ## 快速入门
 
 > 本节为「Boot 速览」：先认识 Boot 怎么让一个项目跑起来、`application.yml` 配什么；「自动装配原理、starter 机制」留在正文提高部分。
 
-### 本讲核心关键词速查
+### 本讲关键词与概念速查
 
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
 | Spring Boot | 让 Spring 项目「开箱即用」的框架 | 引依赖 + 写几个类就能出接口 |
-| starter | 一个依赖包，引进来就自带一堆能力 | `spring-boot-starter-web` |
-| @SpringBootApplication | 项目入口：自动配置+组件扫描+配置类 | 主类上标注 |
-| 自动装配（Auto-Configuration） | Spring 看你要什么，自动建好 Bean | 引了 web 就有 Tomcat + 一堆自动配置 |
-| application.yml | 项目配置文件 | 端口/数据库/日志写这里 |
-| @ConfigurationProperties | 把配置映射成强类型 Bean | 配置文件 → Java 类 |
-| Actuator | Boot 自带的监控端点 | `/actuator/health` |
+| starter | 一组依赖与自动配置入口 | 引入 `spring-boot-starter-web` 才具备 Web 能力，别为一个类随意引入整组能力 |
+| @SpringBootApplication | 项目入口：自动配置+组件扫描+配置类 | 放在能覆盖业务包的扫描根 |
+| 自动装配（Auto-Configuration） | Spring 按 classpath 和配置条件创建 Bean | 引入 Web starter 才满足 Web 相关条件 |
+| application.yml | 项目配置文件 | 多环境通过 profile 分层，不把密钥写死 |
+| @ConfigurationProperties | 把配置映射成强类型 Bean | 前缀必须与 yml 对齐；相关配置优先用它 |
+| @Value | 读取单个配置值 | 不要用它分散承载一组业务配置 |
+| Actuator | Boot 监控端点 | 按需暴露并加访问控制，例如 `/actuator/health` |
 
 ### 本讲在解决什么问题
 
@@ -26,7 +27,9 @@
 - **一句话类比——酒店定食 vs 从头点菜**：生活版：坐进 Boot 这家店，位子（端口 8080）、餐具（JSON 转换）、菜单结构（目录约定）都摆好了，你只负责下单；不满意可以换（改 yml），但不用从摆桌开始。换成 Spring：Boot 预置好默认端口、默认 JSON 序列化、约定的目录结构与扫描规则，你写的 `application.yml` 只是「订单备注」——覆盖默认值，而不是从头搭一套。
 - **你要带走的一句话**：`@SpringBootApplication` 是入口，它同时干了「自动配置 + 组件扫描 + 自己是个配置类」三件事；写配置进 `application.yml`，很多能力靠「引 starter」就有了。
 
-### 最简可运行示例（照抄能跑）
+### 速览代码形态示意（非完整工程）
+
+> 三段代码分别是启动类、配置文件和 HTTP 入口；省略 import、`pom.xml`/`build.gradle` 依赖及数据库驱动。`DemoApplication` 必须位于组件扫描根包，`DB_PASSWORD` 是运行环境提供的变量。
 
 ```java
 // ① 主类: 加上 @SpringBootApplication 就是启动入口
@@ -64,17 +67,6 @@ public class HelloController {
 > - `application.yml`：集中放端口、数据库等配置；`${DB_PASSWORD}` 从环境变量读密钥（不写死）。
 > - `@RestController` + `@GetMapping`：引了 `spring-boot-starter-web` 后就有了 web 能力，写个类就能出接口。
 > - 你只引了一个 starter、写了几行，项目就跑起来了——这就是 Boot「约定优于配置」。
-
-### 关键概念 / 注解说明
-
-| 概念 / 注解 | 干什么 | 最易踩的坑 |
-|-|-|-|
-| `@SpringBootApplication` | 启动入口（自动配置+扫描+配置类） | 每个项目只有一个；要放在能扫到所有包的顶层 |
-| starter | 依赖包，引进即生效 | 别乱引多余 starter（会让自动配置打架） |
-| `application.yml` | 配置文件 | 多环境用 `spring.profiles.active` 切换 |
-| `@ConfigurationProperties` | 配置映射成强类型对象 | 前缀要跟 yml 对上 |
-| `@Value` | 读单个配置值 | 多个相关配置用 `@ConfigurationProperties` 更好 |
-| Actuator | 监控端点 | 记得加访问控制（阶段二第 6 讲），别裸奔公网 |
 
 ### 常用约定 / 命名提示
 
@@ -430,12 +422,12 @@ flowchart LR
 > - DEBUG = 开发期细节
 > **敏感信息（手机号 / Token / 身份证）脱敏后再打**。
 
-### 坑点提醒
+## 坑点提醒
 
 - **`@Value` 与 `@ConfigurationProperties` 别混着用**：前者散落各处、无类型校验；统一后者，一个前缀一个 record。
 - yml 同名 key 覆盖顺序看 profile 激活态，**公共配置别写进 profile 段**（否则关掉 profile 配置就丢了）。
 - `management.endpoints.web.exposure.include: "*"` 在生产等于裸奔——`/actuator/env` 会吐出所有配置（含密码）。
-- MDC 不 `clear()` 是线上「日志串请求」的经典原因——尤其线程池 / 虚拟线程复用场景。
+- MDC 不 `clear()` 是线上「日志串请求」的经典原因——尤其复用工作线程的线程池；虚拟线程也不应依赖隐式上下文透传，应在异步边界显式处理。
 - 启动报「没有某个 Bean」时，先 `--debug` 看条件报告，再查扫描范围，不要盲目加注解。
 
 ## 本节自检
@@ -445,6 +437,9 @@ flowchart LR
 - [ ] 能说出外部化配置的优先级顺序，以及生产环境敏感配置的推荐位置
 - [ ] 能说清 Filter / Interceptor / AOP 三层的执行顺序与典型分工
 - [ ] 能描述 MDC + TraceID 的日志方案，以及 ERROR / WARN / INFO 的级别语义
+- [ ] **场景判断**：生产环境只需给运维探针开放健康检查时，能说明为什么不能直接暴露 `*`，并写出最小暴露面与访问控制的思路。
+
+> 场景题核对：只暴露实际需要的端点（例如 health/prometheus），再由网络边界和 Spring Security 共同限制访问；端点名、可见性和敏感信息脱敏应以所用 Boot 4.x 小版本的官方 Actuator 文档为准。
 
 ## 本节配套思考题
 

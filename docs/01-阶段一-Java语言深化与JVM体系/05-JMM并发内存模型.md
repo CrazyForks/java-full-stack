@@ -9,7 +9,7 @@
 
 > 本节为「并发玄学解密前置」：先认识 JMM 为什么存在、它解决什么；「happens-before 推导、ThreadLocal 怎么泄漏」留在正文提高部分。
 
-### 本讲核心关键词速查
+### 本讲关键词与概念速查
 
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
@@ -29,12 +29,14 @@
 - **答案**：JMM 定义了**共享变量跨线程的可见性规则**。核心是 happens-before：只要满足这条规则，A 的修改就对 B 可见；不满足，B 读到旧值很正常。
 - **你要带走的一句话**：`i++` 之所以丢更新，是因为它其实是「读-改-写」三步，不是原子操作；`volatile` 能保证可见性，但不保证原子性。看到并发问题，先想「有没有 happens-before 保证」。
 
-### 最简可运行示例（照抄能跑）
+### 最简语义示意（省略启动入口）
+
+> 代码只展示 `volatile` 写—读建立 happens-before 的形态，没有创建线程和 `main` 方法，不能单独运行。要验证时需让写线程执行 `writer()`、读线程随后观察 `ready`；一次偶然输出不能证明移除 `volatile` 后必然失败。
 
 ```java
-// volatile 正确可见示例: 一个线程改, 主线程能立刻看到
+// volatile 可见性示意: 读线程一旦读到 ready=true，就能看到此前的 data 写入
 public class VolatileDemo {
-    // volatile 保证 ready 的修改对读线程"立即可见"
+    // volatile 建立可见性与排序约束；读线程读到 true 时可见此前 data 的写入
     private volatile boolean ready = false;
     private int data = 0;
 
@@ -52,11 +54,11 @@ public class VolatileDemo {
 ```
 
 > 代码备注（逐行解释）：
-> - `ready` 加了 `volatile`：写 `ready=true` 时，会把之前写的 `data=42`「刷到主存」，读线程看到 `ready=true` 也就能看到 `data=42`。
+> - `ready` 加了 `volatile`：对 `ready` 的写与随后读到该值的读之间建立 happens-before，因此此前的 `data=42` 对该读线程可见；“刷到主存”只是帮助入门的近似说法。
 > - 如果 `ready` **不加** `volatile`：读线程可能看到 `ready=true` 但 `data` 还是 0——因为普通写不保证马上可见、可能被重排。
 > - 这就是 JMM 的 happens-before：`data=42` happens-before `ready=true`（程序顺序），`ready=true` happens-before `ready` 的读取（volatile 规则），传递后 `data=42` 对读者可见。
 
-### 关键概念说明
+**关键概念、工具与边界：**
 
 | 概念 | 干什么 | 最易踩的坑 |
 |-|-|-|
@@ -305,7 +307,7 @@ public class ThreadLocalLeakDemo {
 - 铁律：**`try { ... } finally { threadLocal.remove(); }`**——尤其线程池 / 虚拟线程（JDK 21 的轻量级线程，一条进程能开几十万条）复用场景。
 - 新代码替代：Java 25 的 `ScopedValue`（第 2 讲）——不可变 + 作用域自动清理，从根上消灭「忘 remove」。
 
-### 坑点提醒
+## 坑点提醒
 
 - **volatile 当锁用**：`if (flag) {...}` 检查后再操作 flag 仍是竞态（检查与修改之间被人插队）；volatile 标志位要求「一写多读」。
 - **DCL 忘写 volatile**：编译期不报错、单测抓不到、上线偶发 NPE——三件套（volatile + 两次检查 + synchronized）一个都不能少。
@@ -319,6 +321,8 @@ public class ThreadLocalLeakDemo {
 - [ ] 能画出 ThreadLocal 引用链并指出哪条链导致泄漏，写出正确清理代码
 - [ ] 能解释 DCL 单例为什么必须 volatile，重排发生在哪三步之间
 - [ ] 能说出锁升级路径，并纠正「偏向锁」的过时认知
+
+**场景核对**：一个线程写 `data = 42; ready = true`，另一个线程轮询 `ready` 后读取 `data`。`ready` 为 volatile 时，读到 `true` 的线程应读到 42；若多个线程都执行 `count++`，volatile 仍不能避免读—改—写竞争，应使用 `AtomicInteger` 或锁。
 
 ## 本节配套思考题
 

@@ -9,7 +9,7 @@
 
 > 🧩 **前置 30 秒：你其实已经会一半**——Cookie 和 localStorage 存 token 的纠结、401（没登录 / 凭证失效，去重新登录）与 403（登录了但权限不够）、XSS / CSP、CORS，这些你在前端早已熟悉的概念，本讲原样复用，后端只是换个位置实现。本讲真正的新东西只有两件：**过滤器链**（请求进 Spring 要先过一串安检门）和**认证 / 授权的分层架构**（谁管「你是谁」、谁管「你能不能」）。细节在第 1 节「架构核心」展开。
 
-### 本讲核心关键词速查
+### 本讲关键词与概念速查
 
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
@@ -17,17 +17,23 @@
 | 授权（Authorization） | 确认「你能干什么」 | admin 才能删用户 |
 | JWT | 一种签名 token，自带用户信息 | 登录后发给前端，每次请求带上 |
 | Security 过滤器链 | 一串安检门，请求逐个过 | 认证 → 授权 → 异常处理 |
-| PasswordEncoder | 密码加密器（BCrypt——刻意算得慢的哈希，暴力试密码成本高） | 存密码前加密 |
+| PasswordEncoder | 密码哈希器（BCrypt——刻意算得慢的哈希，暴力试密码成本高） | 存密码前做不可逆哈希，不是可解密的加密 |
 | RBAC | 按角色判权限 | admin / ops / viewer |
 | @PreAuthorize | 方法级权限校验 | `hasRole('ADMIN')` |
 | 越权 | 不该访问的资源你访问到了 | 改 URL 里的 id 看别人订单 |
+| `@EnableWebSecurity` | 启用 Spring Security 的 Web 配置 | 通常与 `SecurityFilterChain` Bean 配合 |
+| @EnableMethodSecurity | 开启 `@PreAuthorize` 等方法级校验 | 未启用时注解不会执行 |
+| hasRole / hasAuthority | 分别按角色与权限字符串判断 | 前者会补 `ROLE_` 前缀 |
+| SecurityFilterChain | 为匹配请求编排安全过滤器 | 自定义认证过滤器位置取决于启用的认证方式 |
 
 ### 本讲在解决什么问题
 
 - **问题**：接口不能裸奔——要确认「你是谁」（登录）和「你能干什么」（权限）。Spring Security 用一条过滤器链 + 认证/授权分离实现。
 - **你要带走的一句话**：**认证**（Authentication）= 你是谁；**授权**（Authorization）= 你能干什么。JWT 是「自带用户信息 + 签名防篡改」的凭证；`@PreAuthorize` 在方法上校验权限。
 
-### 最简可运行示例（照抄能跑）
+### 速览代码形态示意（非完整工程）
+
+> `JwtAuthFilter` 是认证过滤器，`jwtService` 是负责验签和解析 token 的业务组件，`Claims` 是示意中的自定义 record；省略了 import、异常响应、过滤器注册、密钥管理和 `SecurityFilterChain` 配置，不能直接用于生产。
 
 ```java
 // JWT 过滤器骨架: 从请求头取 token, 解析后放进 SecurityContext
@@ -55,17 +61,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 > - `UsernamePasswordAuthenticationToken`：把解析出的身份包成一个「认证对象」。这个名字是历史遗留——它只是「认证结果的数据载体」，JWT 认证也用它，别被名字带偏。
 > - `SecurityContextHolder...setAuthentication(auth)`：**关键**——放到线程上下文里，后面的 `@PreAuthorize` 授权层才能读到「你是谁、有什么权限」。
 > - `chain.doFilter(req, res)`：**放行**——把请求交给链上下一个过滤器（FilterChain = 这条过滤器链本身，「链」字就在这），链全部走完请求才进得了 DispatcherServlet；某一步验证失败直接 `return` 不调用它，请求就被拦在安检门外。
-
-### 关键概念 / 注解说明
-
-| 概念 / 注解 | 干什么 | 最易踩的坑 |
-|-|-|-|
-| `@EnableWebSecurity` | 开启 Security 配置 | 配合 `SecurityFilterChain` |
-| `@EnableMethodSecurity` | 开启 `@PreAuthorize` 方法级校验 | 忘开则注解不生效 |
-| `PasswordEncoder` | 加密密码 | 用 BCrypt；work factor 别降到 4 |
-| `@PreAuthorize` | 方法级权限校验 | AOP 代理失效场景（自调用/非 public）要小心 |
-| `hasRole` / `hasAuthority` | 判角色 / 判权限 | `hasRole` 自动加 `ROLE_` 前缀，`hasAuthority` 不加 |
-| 过滤器位置 | JWT Filter 插在哪 | 加在 `UsernamePasswordAuthenticationFilter` **之前** |
 
 ### 常用约定 / 命名提示
 
@@ -96,23 +91,24 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 ```mermaid
 flowchart TB
     A[浏览器<br/>发出请求] --> B[Servlet 容器过滤器链<br/>最外层安检门]
-    B --> C[SpringSecurityFilterChain<br/>本身也是一个 Servlet Filter<br/>排在容器链最前]
-    C --> D[你的 JwtAuthFilter<br/>取 token 验签<br/>身份塞进 SecurityContext]
-    D --> E[认证过滤器<br/>认「你是谁」]
-    E --> F{认证通过?}
-    F -- 否 --> X1[401 未认证<br/>没登录 / 凭证失效<br/>请重新登录]
-    F -- 是 --> G[AuthorizationFilter<br/>判「你能不能」]
-    G --> H{授权通过?}
-    H -- 否 --> X2[403 权限不足<br/>禁止访问]
-    H -- 是 --> I[DispatcherServlet<br/>第 3 讲的请求总调度台]
-    I --> J[Controller<br/>你的业务代码]
+    B --> C[DelegatingFilterProxy<br/>委托给 FilterChainProxy]
+    C --> D[匹配的 SecurityFilterChain<br/>一组 Spring Security 过滤器]
+    D --> E[你的 JwtAuthFilter<br/>取 token 验签<br/>身份塞进 SecurityContext]
+    E --> F[认证过滤器<br/>认「你是谁」]
+    F --> G{认证通过?}
+    G -- 否 --> X1[401 未认证<br/>没登录 / 凭证失效<br/>请重新登录]
+    G -- 是 --> H[AuthorizationFilter<br/>判「你能不能」]
+    H --> I{授权通过?}
+    I -- 否 --> X2[403 权限不足<br/>禁止访问]
+    I -- 是 --> J[DispatcherServlet<br/>第 3 讲的请求总调度台]
+    J --> K[Controller<br/>你的业务代码]
 ```
 
 > **生活版——演唱会入场**：一道接一道闸口，验票口核对「票是不是你的」（认证过滤器）、分区口查「你的票能进哪个区」（授权过滤器）、票有疑问被带到旁边处置（异常过滤器），全过才进得了内场。换成 Spring Security——上面三个过滤器就是这三道闸口，顺序错位（先授权后认证）等于先问「你能进哪」再查「你是谁」，永远放不进人。
 
-> **位置说明**：`SpringSecurityFilterChain` 本身就是一个 Servlet Filter，排在容器过滤链**最前**；自定义 JWT Filter 加在 `UsernamePasswordAuthenticationFilter` 之前，语义是「先解析令牌填充 SecurityContext，再走标准认证/授权流程」——插错位置，后面的授权过滤器看到的就是空上下文。
+> **位置说明**：容器中的 `DelegatingFilterProxy` 会委托给 Spring Security 的 `FilterChainProxy`；后者按请求选择 `SecurityFilterChain` 中的一组过滤器。Bearer JWT 认证过滤器必须在授权前填充 `SecurityContext`，但参考点应按实际启用的认证机制选择；本例以 `UsernamePasswordAuthenticationFilter` 为参照，不是所有项目的固定位置。
 
-> ⏸️ **短期可以不学**：Security 内部几十个过滤器的源码级剖析（DelegatingFilterProxy 如何桥接容器与 Spring、FilterChainProxy 如何编排）不影响日常配置，现在深挖投入产出比低。**何时回来学**：遇到「过滤器不生效 / 顺序错」且靠文档排不掉的诡异问题时。**面试最低要求**：能说清「SpringSecurityFilterChain 本身是一个 Servlet Filter、请求先闯完整条链才到 DispatcherServlet、自定义 JWT 过滤器插在 `UsernamePasswordAuthenticationFilter` 之前」即可。
+> ⏸️ **短期可以不学**：Security 内部几十个过滤器的源码级剖析（`DelegatingFilterProxy` 如何桥接容器与 Spring、`FilterChainProxy` 如何编排）不影响日常配置，现在深挖投入产出比低。**何时回来学**：遇到「过滤器不生效 / 顺序错」且靠文档排不掉的诡异问题时。**本讲仍需掌握**：请求会经 `FilterChainProxy` 选择的安全过滤器链后才到 `DispatcherServlet`；认证必须早于授权，JWT 的具体插位要按实际链路确认。
 
 ```java
 @Configuration
@@ -144,7 +140,7 @@ public class SecurityConfig {
 
 - **CSRF 为什么能关（Cookie 自动带 vs JWT 手动带）**
   - **生活版**：Cookie 是浏览器**自动带的门票**：每次请求浏览器都无脑把它塞进请求头，所以第三方网站只要诱导你访问一次恶意页面，就能借你身上这张门票替你发请求（转账、改密），这就是 CSRF（跨站请求伪造）；而 JWT 放 `Authorization` 头是**手动出示的门禁卡**：由 JS 显式携带，浏览器不会自动带，攻击者网站拿不到你的 token，自然伪造不出请求。
-  - **换成 Spring Security**：纯 JWT 方案天然免疫 CSRF，所以配置里 `csrf.disable()` 可以放心关；但**一旦改回 Cookie + Session 方案，必须开回来**。
+  - **换成 Spring Security**：当浏览器只把 JWT 放在 `Authorization` 请求头、且不会自动附带其他认证 Cookie 时，跨站页面通常无法替用户构造带凭证的请求，CSRF 风险显著降低；这不等于没有 XSS、token 泄漏等风险。若认证依赖 Cookie（包括 Cookie 中的 token），应按场景保留或配置 CSRF 防护，不能直接套用 `csrf.disable()`。
 - **认证四件套（酒店入住）**
   - **生活版**：办入住时，前台先查「当日入住名单」里有没有你的预订（查房客登记表），再核对证件照「人证是否一致」，不同证件走不同窗口（护照 / 身份证 / 驾照），大堂经理按你出示的证件类型把你分派到对应窗口，最后你的名字记进入住名单。
   - **换成 Spring Security**：
@@ -299,9 +295,9 @@ flowchart LR
 
 > ⏸️ **短期可以不学**：SSO 与网关统一鉴权建立在「多系统 / 微服务」架构上，单机单体项目用不上，且细节已在阶段四、阶段六对应讲次展开。**何时回来学**：项目拆成多个服务、或要接公司统一登录平台时。**面试最低要求**：能说出「网关统一验签 + 透传身份头 + 下游只信内部流量」的架构原则，以及「每服务各自验 token」是反模式即可。
 
-### 坑点提醒
+## 坑点提醒
 
-- **过滤器顺序错**：自定义过滤器加在 `AuthorizationFilter` 之后 = 授权判定先跑完才认证，永远匿名；加在 `UsernamePasswordAuthenticationFilter` **之前**是惯例位。
+- **过滤器顺序错**：认证过滤器若在 `AuthorizationFilter` 之后执行，授权看到的仍是匿名身份。JWT 插位必须保证认证早于授权；参照哪个现有过滤器取决于当前启用的认证方式，配置后应打印实际链路验证。
 - **白名单漏配内部路径**：`/actuator/**`、`/v3/api-docs`、错误页 `/error`——actuator 裸奔到公网等于把配置 / 线程 / 堆全交出去。
 - **把 BCrypt 强度调过低**：work factor 默认 10，别降到 4 换登录快——离线爆破成本骤降；觉得慢先查登录链路，不是降安全。
 - **@PreAuthorize 打在非 public / 自调用方法上**：它是 AOP（第 1 讲），代理进不去切面就不生效——「加了注解没拦住」先查这两点。
@@ -313,6 +309,9 @@ flowchart LR
 - [ ] 能解释 PKCE 防的是什么攻击，OIDC 与 OAuth 的关系
 - [ ] 能用 `@PreAuthorize` 同时表达「角色门禁」与「数据归属校验」
 - [ ] 能说清网关统一鉴权时，下游服务「信什么、为什么敢信」
+- [ ] **场景判断**：为 Bearer JWT 添加认证过滤器时，能先确认已有认证方式和过滤器链，再把它放在授权之前，而不是把「永远在 `UsernamePasswordAuthenticationFilter` 前」当成无条件规则。
+
+> 场景题核对：认证必须发生在授权前；具体插位以 `SecurityFilterChain` 中实际启用的过滤器为准。可开 DEBUG 查看链路，或按 Spring Security 当前版本官方文档的 `addFilterBefore/After` 规则配置。
 
 ## 本节配套思考题
 
@@ -324,7 +323,7 @@ flowchart LR
 
 ### Q1：Spring Security 中一个请求从进入到返回，认证和授权分别由哪些组件完成？
 
-**答**：请求先进 Servlet 过滤器链，其中 `SpringSecurityFilterChain`（本身就是一个 Servlet Filter）接管。两个阶段分头干：
+**答**：请求先进 Servlet 过滤器链，`DelegatingFilterProxy` 将请求交给 Spring Security 的 `FilterChainProxy`，后者选出匹配的 `SecurityFilterChain`。两个阶段分头干：
 - **认证阶段**：由 `UsernamePasswordAuthenticationFilter` 等认证过滤器触发 `AuthenticationManager`（实际是 `ProviderManager`，委派给对应的 `AuthenticationProvider`），Provider 通过 `UserDetailsService` 查用户、`PasswordEncoder` 验密码，成功后构造 `Authentication` 放进 `SecurityContextHolder`（ThreadLocal）。
 - **授权阶段**：由 `AuthorizationFilter` 做 URL 级判定（permitAll / authenticated）；方法级 `@PreAuthorize` 则由 AOP 在方法调用前用 `AuthorizationManager` 再判一次。
 

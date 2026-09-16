@@ -7,7 +7,7 @@
 
 > 本节为「写接口速览」：先认识怎么接参数、返回数据、统一响应；「幂等、分页、错误码规范」留在正文提高部分。
 
-### 本讲核心关键词速查
+### 本讲关键词与概念速查
 
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
@@ -19,13 +19,21 @@
 | 全局异常 | 一处处理所有报错 | `@RestControllerAdvice` |
 | 幂等 | 同一请求执行多次不影响结果 | 防止重复支付/下单 |
 | 分页 | 数据分批返回 | `?page=1&size=20` |
+| `@PathVariable` | 取 URL 路径参数 | 路径模板必须有同名占位符 |
+| `@RequestParam` | 取查询或表单参数 | 可选参数须声明 `required=false` 或给默认值 |
+| `@RequestBody` | 读取 JSON 请求体 | 一个请求体只能被完整读取一次 |
+| `@Valid` | 触发 DTO 字段校验 | 校验注解需要写在 DTO 字段上 |
+| `@RestControllerAdvice` | 集中处理异常并转为响应 | 不应把堆栈原样返回客户端 |
+| `ApiResponse<T>` | 统一响应包装 | 业务码与 HTTP 状态码的职责需事先约定 |
 
 ### 本讲在解决什么问题
 
 - **问题**：写接口不难，难的是「接口可维护、前端对接舒服」。要统一响应格式、统一错误码、处理参数校验、分页、幂等。
 - **你要带走的一句话**：好的接口 = **统一响应 + 明确错误码 + 参数校验 + 合理分页 + 幂等**。前端同事对接时舒服，是因为这些约定你在一开始就定好了。
 
-### 最简可运行示例（照抄能跑）
+### 速览代码形态示意（非完整工程）
+
+> `ApiResponse<T>` 是统一响应包装，`User` 和 `CreateUserReq` 分别是返回与创建请求 DTO，`userService` 是注入的业务服务；代码省略了这些类型、构造器、校验注解、import 和项目依赖，不能单独运行。
 
 ```java
 @RestController                        // 处理 HTTP 请求并返回 JSON
@@ -50,17 +58,6 @@ public class UserController {
 > - `@PathVariable Long id`：从 URL 路径 `{id}` 里拿值（`/api/users/123` 的 123）。
 > - `@RequestBody CreateUserReq req`：从 HTTP 请求体（JSON）反序列化成 Java 对象。
 > - `ApiResponse.ok(...)`：统一响应包装——所有接口都返回 `{code, message, data}`，前端好写统一处理。
-
-### 关键注解 / 概念说明
-
-| 注解 / 概念 | 干什么 | 最易踩的坑 |
-|-|-|-|
-| `@PathVariable` | 取 URL 路径参数 | 路径模板里要写 `{id}` |
-| `@RequestParam` | 取查询参数 | `@RequestParam(required=false)` 可选 |
-| `@RequestBody` | 取 JSON 请求体 | 没这注解就拿不到 body |
-| `@RestControllerAdvice` | 全局异常统一处理 | 别漏，否则异常直接裸奔 |
-| `@Valid` / `@Validated` | 参数校验 | 校验注解（`@NotBlank` 等）要配 `@Valid` |
-| 统一响应 `ApiResponse` | 打包返回格式 | 错误时 HTTP 状态码与 code 要对应 |
 
 ### 常用约定 / 命名提示
 
@@ -467,7 +464,7 @@ public class WebConfig implements WebMvcConfigurer {
 
 > 预检（OPTIONS）：非简单请求（自定义 Header / JSON POST 跨域）会先发 OPTIONS 试探——浏览器要先确认服务器「允许跨域 + 允许哪些方法/头」，才敢发出真正会产生副作用的请求；排查「接口没进 Controller 却返回 403」时先想到它。
 
-### 坑点提醒
+## 坑点提醒
 
 - `@RequestBody` 与 `@RequestParam` 不能同用一个参数来源：前者读 body 流（只能读一次——Node 的 `req` stream 同理，读过就没了，所以 `@RequestBody` 只能标一个参数），后者读 URL / 表单。
 - 校验注解写在 `Map` / `String` 裸参数上不生效——**先包 DTO**，校验才有落点。
@@ -481,6 +478,9 @@ public class WebConfig implements WebMvcConfigurer {
 - [ ] 能为一个「创建订单」接口设计幂等方案（token / 唯一索引 / 状态机至少组合两种）
 - [ ] 能说清路径版本与 Header 版本的取舍，以及深翻页为什么用游标
 - [ ] 能用 SpringDoc 给接口加注解并生成可调试文档
+- [ ] **场景判断**：客户端因超时重试同一个创建订单请求时，能给出「唯一业务键或幂等令牌 + 原子写入」方案，并解释为何先查后写会竞争。
+
+> 场景题核对：判断重复的依据必须由服务端持久化或原子存储保证；仅先查询再插入会在并发窗口内同时通过，仍可能产生两笔订单。
 
 ## 本节配套思考题
 

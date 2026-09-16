@@ -7,7 +7,7 @@
 
 > 本节为「函数式热身」：先认识本讲会反复用到的几个关键词与写法，能照抄跑通；「惰性求值怎么优化、Optional 什么时候别用」留在正文提高部分。
 
-### 本讲核心关键词速查
+### 本讲关键词与概念速查
 
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
@@ -51,7 +51,7 @@ public class StreamDemo {
 > - `.collect(...)` 终端操作：**触发真执行**，把结果收集成新列表。没有它，前面的 filter/map 都不会跑。
 > - 对比你熟悉的 JS：等价于 `names.filter(n => n.length > 3).map(n => n.toUpperCase())`。
 
-### 关键方法 / 类说明
+**常用方法、类与边界：**
 
 | 方法 / 类 | 干什么 | 最易踩的坑 |
 |-|-|-|
@@ -358,7 +358,7 @@ System.out.println(lengths1);                    // 输出: [5, 3, 7]
 
 > **读代码肌肉训练**：看到 `map(User::getName)` 要立刻反应「从 User 流映射为姓名流」——方法引用是现代 Java 代码的「高频词」，不熟它阅读速度会慢一半。
 
-### 坑点提醒
+## 坑点提醒
 
 - **Stream 只能消费一次**：`stream.collect(...)` 之后再对同一个 stream 调用任何操作抛 `IllegalStateException`——要再次处理请从集合重新 `stream()`。
 - **`orElse` vs `orElseGet`**：`orElse(expensive())` 里 expensive **永远执行**（先求值再传入）；`orElseGet(() -> expensive())` 只在空时执行。生活版：兜底动作是「给客户打一通电话」——`orElse` 是不管客户在不在家都先拨一遍，`orElseGet` 是确认没人应答了才拨。兜底逻辑有成本时必须用后者。
@@ -372,6 +372,8 @@ System.out.println(lengths1);                    // 输出: [5, 3, 7]
 - [ ] 能解释「中间操作不触发执行」，并说出 3 个短路操作
 - [ ] 能把一段 `if (x != null) {...}` 嵌套改写为 Optional 链，并说明 `orElse` 与 `orElseGet` 的执行时机差异
 - [ ] 能用 `LocalDateTime` + `Duration` 完成时间加减与格式化，不再碰 `Date` / `Calendar`
+
+**场景核对**：订单列表写了 `stream().filter(Order::isPaid)`，随后直接结束方法。它不会报错，但筛选不会执行；补上 `toList()`、`count()` 等终端操作。若兜底值需要查库，应选 `orElseGet`，避免 Optional 有值时仍提前查库。
 
 ## 本节配套思考题
 

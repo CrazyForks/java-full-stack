@@ -7,7 +7,7 @@
 
 > 本节为「零基础预热」：先认识本讲会用到的关键词与技术点，能照抄跑起来；「为什么这么设计、底层怎么实现」留在正文提高部分。
 
-### 本讲核心关键词速查
+### 本讲关键词与概念速查
 
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
@@ -20,6 +20,11 @@
 | @Transactional | 声明「这个方法要么全成功、要么全回滚」的事务切面 | 下单 + 扣库存必须一起成功 |
 | 事件（Event） | 某件事发生后，广播给感兴趣的监听器去处理（解耦） | 下单成功 → 发短信 / 同步 ES（Elasticsearch，分布式搜索引擎，阶段三展开） |
 | 代理对象 | 容器给你的其实是「替身」，替身在你调用前后插入额外逻辑 | 你注入的是代理，不是原始类 |
+| `@Component` / `@Bean` | 把类或方法返回值交给容器管理 | 自己写的业务类用前者；第三方对象常用后者 |
+| `@Autowired` | 让容器注入依赖；单构造器可省略 | 字段注入不利于测试与不可变设计 |
+| `ApplicationEventPublisher` | 发布应用内事件 | 默认同步；副作用要考虑事务提交时机 |
+| `@Configuration` + `@Bean` | 把第三方对象或定制对象声明为 Bean | 方法名常成为 Bean 名，返回类型参与匹配 |
+| `@Aspect` | 声明切面类 | 仍需由容器管理，否则切面不会生效 |
 
 ### 本讲在解决什么问题
 
@@ -27,7 +32,9 @@
 - **Spring 的答案**：把「怎么造对象、怎么连对象」交给**容器**；把「日志/事务这类横切逻辑」交给 **AOP** 切面；把「某件事发生后的连锁反应」交给**事件**。你专注业务本身。
 - **你要带走的一句话**：你写的每个 `@Service` / `@Autowired`，背后都是容器在替你完成「创建 + 连接」——所以**别在构造器里用依赖、别用 `this` 调事务方法**，因为容器给你的永远是「代理 + 已注入好的对象」。
 
-### 最简可运行示例（照抄能跑）
+### 速览代码形态示意（非完整工程）
+
+> 代码展示 `HelloService`（业务 Bean）被 `HelloController`（HTTP 入口）构造器注入的形态；省略了 import、Maven/Gradle 中的 Web 依赖和启动类。放入一个启用组件扫描的 Spring Boot Web 项目后才能运行。
 
 ```java
 // ① 一个业务类：标注 @Service，Spring 就把它交给容器管理
@@ -60,24 +67,11 @@ public class HelloController {
 > - `@GetMapping("/hello")` 表示「浏览器访问 `/hello` 这个地址，就执行下面的方法」。
 > - 你从没写过一个 `new HelloService()`，但它却能正常执行——这就是 IoC：对象由容器创建装配。注解版 `@Autowired` 用在字段上是反模式（正文展开），本示例用更规范的构造器注入。
 
-### 关键注解 / 类说明
-
-| 注解 / 类 | 干什么 | 最易踩的坑 |
-|-|-|-|
-| `@Component` | 基础「交给容器」标注；`@Service`/`@Repository`/`@Controller` 是它的语义化变体 | 忘了标 = 容器不认识，注入时报「找不到 Bean」 |
-| `@Autowired` | 从容器拿一个 Bean 注入 | 可省略（单构造器），但字段注入是反模式 |
-| `@Configuration` + `@Bean` | 第三方库对象、需要定制逻辑的对象，用这种方式手动声明进容器 | 方法名即 Bean 名；返回值类型决定匹配 |
-| `@Aspect` | 声明切面类（配合 `@Component`） | 忘了 `@Component` 切面不生效 |
-| `@Transactional` | 方法级事务（成功提交/异常回滚） | `this` 自调用、非 public、受检异常默认不回滚——五大失效场景 |
-| `ApplicationEventPublisher` | 发布事件 | 监听器默认同步且在事务内，副作用逻辑要用 `@TransactionalEventListener` |
-
-> 注：受检异常=Java 强制要求 try-catch 或 throws 声明才能编译的异常，如 `IOException`，默认不回滚；`RuntimeException` 及其子类不强制、叫非受检——前端没这概念，阶段一也没专讲，先记住这个区别。
-
 ### 常用约定 / 命名提示
 
 - **注解分层命名**：`@Controller`（Web 入口）/ `@Service`（业务）/ `@Repository`（数据）——语义不同但效果都是「交给容器」。
 - **构造器注入是惯例**：能 `final`、依赖一目了然、单测好写；字段注入（`@Autowired` 属性）是反模式，能不用就不用。
-- **看到 `javax.*` 换 `jakarta.*`**：Boot 4 / Jakarta EE 11 已全量迁移，老教程里的 `javax.servlet` 等已废弃。
+- **`javax.*` 与 `jakarta.*` 要按版本判断**：Spring Framework 6+、Boot 3+ 已迁至 Jakarta 命名空间；本阶段的 Boot 4.x 示例使用 `jakarta.*`。维护旧应用时不能机械替换，应先确认其 Spring/Servlet 版本。
 - **排查「Bean 注入失败」**：先问「这个类标 `@Component` 了吗」→「它在 Spring 能扫到的包下面吗」→「构造器参数容器里有对应 Bean 吗」。
 
 ## 精简大纲
@@ -107,7 +101,7 @@ flowchart TB
 
 > **IoC（Inversion of Control，控制反转）**：对象的创建与装配不由你自己 `new`，而是交给容器管理——你只声明「我需要什么」，容器负责「造好并递给你」。NestJS 的 `@Injectable()` + 依赖注入是同一个思想。
 > **AOP（Aspect-Oriented Programming，面向切面编程）**：把日志、事务这类「每个方法都要但每个方法都不该写」的横切逻辑抽出来集中声明。
-> **基线提示**：Boot 4 / Framework 7 基于 Jakarta EE 11，所有 `javax.*` 早已迁移为 `jakarta.*`（`jakarta.servlet`、`jakarta.persistence`……）——看到老博客里的 `javax.*` 要自觉换算。
+> **基线提示**：本讲的 Boot 4.x / Framework 7 示例使用 Jakarta API（`jakarta.servlet`、`jakarta.persistence` 等）。看到老博客中的 `javax.*` 时，先确认它面向的 Spring 与 Servlet 版本，再决定是否迁移，不能只替换包名。
 
 > **生活类比：从「前台下厨」到「只递清单、厨房全包」**——以前你经营小饭馆，客人点什么菜你就得亲自起灶炒（代码里自己 `new OrderService()`、自己拼好依赖）；现在你只把一张「菜单需求清单」递给厨房，进什么货、怎么配菜、锅碗谁消毒，全由厨房包办，你只负责验收菜品合不合格。换成 Spring：你声明 `@Service`、`@Repository`，在构造器里写一句「我要一个 `OrderRepository`」，容器就负责 new 出对象并双手递来——「创建与装配对象的权力」从你手里反转让给了容器，这叫 IoC（控制反转）；依赖注入（DI）只是这种反转的具体实现方式。
 
@@ -487,7 +481,7 @@ public class PriceGateway {
 
 > ⏸️ **短期可以不学**：`Resource` 抽象与 `PropertySource` 细节，日常业务开发基本碰不到——Boot 的 `application.yml` + `@ConfigurationProperties` 已经覆盖 99% 的配置读取需求。**何时回来学**：做框架 / 中间件开发、需要统一读取 classpath 与文件系统资源时。**面试最低要求**：知道 `@Value` 与 `Environment` 是两种配置读取入口即可。
 
-### 坑点提醒
+## 坑点提醒
 
 - **不要在构造器里用注入的依赖**——构造器执行时属性注入还没发生，需要初始化逻辑放 `@PostConstruct`。
 - **自调用是 AOP 失效第一现场**：同类的 `this.method()` 一律不走代理。需要内部走切面时，构造器注入下可用 `ObjectProvider<T>` 延迟拿自身代理，或 `AopContext.currentProxy()`（需开启 `exposeProxy`）——但首选永远是拆类。
@@ -502,6 +496,9 @@ public class PriceGateway {
 - [ ] `@Transactional` 失效的五个场景能逐一推导（不是背）
 - [ ] 能说清 `@TransactionalEventListener` 与普通 `@EventListener` 的差异及典型用途
 - [ ] 能解释注入到你的 `OrderService` 为什么是代理对象、代理是什么时候生成的
+- [ ] **场景判断**：下单事务中要「落库成功后再发通知」，能选择 `@TransactionalEventListener(AFTER_COMMIT)`，并说明它在无事务时默认不执行。
+
+> 场景题核对：普通 `@EventListener` 默认在发布线程同步执行，监听器异常会影响当前事务；`AFTER_COMMIT` 只在提交成功后触发，若业务允许无事务事件才显式考虑 `fallbackExecution`。
 
 ## 本节配套思考题
 

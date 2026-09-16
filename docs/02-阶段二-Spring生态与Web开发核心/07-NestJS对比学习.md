@@ -9,16 +9,16 @@
 
 > 🧩 **前置 30 秒：五个请求件**——你已经会 NestJS 的五个「请求件」：Middleware（中间件，最外层横切）、Guard（守卫，鉴权）、Interceptor（拦截器，包响应流）、Pipe（管道，转参数）、ExceptionFilter（异常过滤器，兜底）。Spring 把同一套事情拆得更碎、摆在不同的层——所以本讲只做两件事：**对上名字**（下方映射表）、**指出它在哪一层**（第 1 节的生命周期对照图）。细节在「学习内容详情」第 2 节展开。
 
-### 本讲核心映射速查
+### 本讲关键词与概念速查
 
 | NestJS | Spring | 一句话对比 |
 |-|-|-|
-| `@Module` | `@Configuration` + `@ComponentScan` | Spring 隐式组件扫描（Component Scan），NestJS 显式声明模块 |
+| `@Module` | `@Configuration` + `@ComponentScan` | NestJS 显式声明模块，Spring 默认按扫描根发现组件 |
 | `@Injectable()` | `@Service` / `@Component` | 都是「交给容器管理」（IoC 容器 + 依赖注入 Dependency Injection） |
 | `@Controller` | `@RestController` | 都是处理 HTTP 请求 |
 | `@UseGuards(Guard)` | 过滤器链 / 拦截器 / `@PreAuthorize` | 鉴权是「三层组合」：链 + 拦截器 + 方法级注解 |
 | `Pipe`（如 ParseIntPipe） | Converter + Bean Validation | 参数转换 + 校验分两个机制 |
-| `Interceptor` | Spring AOP（Aspect-Oriented Programming，面向切面编程） | AOP 在字节码代理层，覆盖更广 |
+| `Interceptor` | Spring AOP（Aspect-Oriented Programming，面向切面编程） | AOP 代理可覆盖 Bean 方法，不只 Controller |
 | ExceptionFilter | `@RestControllerAdvice` | 全局异常统一处理 |
 | 生命周期钩子 | Bean 生命周期回调 | `@PostConstruct` / `@PreDestroy` |
 | EventEmitter | ApplicationEvent | Spring 事件默认同步执行，可挂事务提交时机（见下注）；详见面试题 Q4 |
@@ -30,7 +30,9 @@
 - **问题**：你有 NestJS 底子，Spring 的很多概念其实似曾相识——只是名字、写法不同。本讲把「同一件事的两种写法」对照起来，学得最快。
 - **你要带走的一句话**：**概念是通用的，实现方式不同**。看到 Spring 里不熟的写法，先映射到熟悉的 NestJS 概念，再记差异（隐式/显式、AOP 深度、校验位置）。
 
-### 最简对照示例（照抄能跑）
+### 速览代码形态示意（非完整工程）
+
+> `AdminGuard` 是 NestJS 的守卫，两个 `service` 都是省略构造器注入的业务服务，`User` 是返回 DTO/实体示意；代码省略模块配置、import、鉴权实现和 Spring Security 启用方式，只用于比较请求入口的分工。
 
 ```typescript
 // NestJS: 一个接口, 用 Guard 鉴权、Pipe 校验
@@ -62,17 +64,6 @@ public class UserController {
 > - NestJS 的 `ParseIntPipe`（把参数转 int）在 Spring 由 `@PathVariable Long id` 自动完成类型转换 + 校验注解分工。
 > - Spring 的鉴权是「过滤器链 + 方法级注解」组合：链先做认证（你是谁），`@PreAuthorize` 做授权（你能干什么）。
 > - 一个核心差异：Spring AOP 在**字节码代理层**工作（任何 Bean 方法都能切），NestJS Interceptor 只包 Controller 路由。
-
-### 关键映射 / 用法说明
-
-| NestJS | Spring | 差异要点 |
-|-|-|-|
-| `@Module` | `@Configuration` | NestJS 模块显式，Spring 组件扫描隐式 |
-| Guard | 过滤器链 / 拦截器 / `@PreAuthorize` | 鉴权是三层组合而不是单一 Guard |
-| Pipe | Converter + Bean Validation | 参数转换 / 校验两个机制 |
-| Interceptor | AOP 切面 | AOP 覆盖更广（不只 Controller） |
-| ExceptionFilter | `@RestControllerAdvice` | 统一异常处理 |
-| 生命周期钩子 | `@PostConstruct`/`@PreDestroy` | Bean 生命周期回调 |
 
 ### 常用约定 / 迁移提醒
 
@@ -315,7 +306,7 @@ classDiagram
 2. **再记差异**：重点记「关键差异」列与第 3 节深层原因——直觉迁移踩坑都在这里。
 3. **练手验证**：同一需求（「带 RBAC 的 CRUD 接口」）用两种栈各写一遍，差异自现。
 
-### 坑点提醒
+## 坑点提醒
 
 - **别把 NestJS 的「Guard」直译成 Spring Filter**：认证/授权/异常转码三件事在 Spring 分属过滤器链 / @PreAuthorize / @RestControllerAdvice——先问「我想拦在哪层」。
 - **@Injectable 心智套到所有 @Component**：Spring 的 @Repository 等派生注解有**额外行为**（如 @Repository 触发持久化异常转译），不是纯改名。
@@ -327,6 +318,9 @@ classDiagram
 - [ ] 能解释 Spring「隐式装配」与 NestJS「显式 Module」在调试排查路径上的不同
 - [ ] 能说出 Spring AOP 为什么能实现 @Transactional 而 NestJS Interceptor 不能
 - [ ] 能就「同一需求双栈实现」写出各自的 Guard/Pipe/Interceptor 对应代码骨架
+- [ ] **场景判断**：一个接口要求「登录、管理员权限、参数校验、统一错误响应」时，能分别安排 NestJS 的 Guard/Pipe/ExceptionFilter 与 Spring 的认证过滤器、`@PreAuthorize`、`@Valid`、`@RestControllerAdvice`。
+
+> 场景题核对：不能把 Guard 简化等同为 Spring 的单一 Filter；Spring 的认证、授权、参数校验和异常转换位于不同层，具体选点取决于要保护的是请求、方法还是参数。
 
 ## 本节配套思考题
 

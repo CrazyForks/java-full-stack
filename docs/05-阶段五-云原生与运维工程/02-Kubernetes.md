@@ -1,13 +1,13 @@
 # 阶段五 · 小点 2：Kubernetes
 
 > 所属：阶段五 云原生与运维工程
-> 定位：企业级部署的事实标准。目标不是「会背对象清单」，而是掌握三件事：核心对象的心智模型、Spring Boot 上 K8s 的适配点、以及一套背下来的故障排查路径。
+> 定位：常见的容器编排平台。目标不是「会背对象清单」，而是掌握三件事：核心对象的心智模型、Spring Boot 上 K8s 的适配点、以及一套可复用的故障排查路径。
 
 ## 快速入门
 
 > 本节为「K8s 速览」：先认识 K8s 是什么、解决什么问题、几个核心对象；「网络边界、发布策略」留在正文提高部分。
 
-### 本讲核心关键词速查
+### 本讲关键词与概念速查
 
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
@@ -19,13 +19,16 @@
 | 探针 | 健康检查（liveness/readiness/startup） | 判断容器活没活/就绪没 |
 | 滚动发布 | 逐个替换 Pod 更新 | 不中断服务升级 |
 | HPA | 自动扩缩容 | 按 CPU 加副本 |
+| Ingress Controller | 读取 Ingress 规则并实际转发流量的控制器 | 仅创建 Ingress 资源不会自动产生入口能力 |
 
 ### 本讲在解决什么问题
 
 - **问题**：容器多了不好管——谁来调度、扩缩、自愈、更新？K8s 负责编排：声明「要什么」，它自动让集群变成那个样子。
 - **你要带走的一句话**：**Pod** 是最小运行单元，**Deployment** 管副本，**Service** 提供稳定入口，**Ingress** 对外路由。核心是「声明期望状态，K8s 自动收敛」——你写 YAML 描述"要什么"，K8s 负责"变成那样"。
 
-### 最简可运行示例（照抄能跑）
+### 速览形态示意（非完整可部署清单）
+
+> 示例只展示 Deployment、镜像与三类探针的关系；`registry/my-app:1.0` 是占位镜像，探针路径还依赖 Spring Boot Actuator 的依赖、暴露配置和健康分组。资源请求/限制、Service、权限与优雅停机均被省略，补齐并通过集群校验后才能部署。
 
 ```yaml
 # Deployment: 声明这个应用要有 3 个副本, 用哪个镜像, 探针怎么探
@@ -57,18 +60,6 @@ spec:
 > - `template`：定义每个 Pod 用哪个镜像、端口、探针。
 > - **三种探针**：`startupProbe`（慢启动保护）、`readinessProbe`（就绪才接流量）、`livenessProbe`（挂了重启）——这是 Spring Boot 上 K8s 最关键的适配点（用 Actuator 的 `/actuator/health`）。
 > - **声明式**：你只写"要 3 个、健康才接流量、挂了重启"，剩下的 K8s 自动调度——这就是「编排」的核心。
-
-### 关键概念说明
-
-| 概念 | 干什么 | 最易踩的坑 |
-|-|-|-|
-| Pod | 最小运行单元 | 一个 Pod 通常一个主容器 |
-| Deployment | 管理副本 | 声明式：要几个给几个 |
-| Service | 稳定入口 | 负载均衡到 Pod |
-| Ingress | L7 路由 | ingressClassName 指向集群控制器 |
-| 三种探针 | 健康检查 | startup/readiness/liveness 别混用 |
-| 滚动发布 | 逐个替换 | 配 preStop + gracePeriod 保优雅停机 |
-| HPA | 自动扩缩 | 阈值要和容量规划对齐（阶段六第 6 讲） |
 
 ### 常用约定 / 命名提示
 
@@ -250,10 +241,10 @@ flowchart LR
 | **Ingress** | 「外部 HTTP(S) 流量怎么路由到哪个 Service」——七层规则、TLS 终止 | 不做业务鉴权、不做灰度策略 |
 | **Gateway** | 「业务级路由」——统一鉴权、按 Header/权重灰度、业务限流 | 不直接暴露给公网（通常藏在 Ingress 后面） |
 
-> 🧩 前置 30 秒：**Service 发现 = 公司前台总机**——生活版：你找某个人不记他手机号，拨「总机」转接，人换了工位总机号不变；回到 K8s：Pod 生生死死、IP 换来换去，Service 就是这台永远不变的总机号，其他服务只要记 Service 名即可。
+> 🧩 前置 30 秒：**Service 发现 = 公司前台总机**——生活版：你找某个人不记他手机号，拨「总机」转接，人换了工位总机号不变；回到 K8s：Pod 生生死死、IP 换来换去，Service 在自身生命周期内提供稳定的名字和虚拟地址，其他服务只需使用 Service 名。
 
 - Service 三种类型：`ClusterIP`（默认，仅集群内）/ `NodePort`（每节点开一个端口）/ `LoadBalancer`（云厂商 SLB）。
-- **为什么 Service 的 IP 是「虚拟」的**：它不挂在任何网卡上，由每台节点上的 kube-proxy（流量转发代理）写入 iptables / IPVS 转发规则——Pod 的 IP 随生随死，这个 VIP 永远不变。转发链路：
+- **为什么 Service 的 IP 是「虚拟」的**：它通常不挂在普通网卡上，由 kube-proxy 的 iptables/IPVS 模式或其他数据面实现转发规则。Pod IP 会变化，ClusterIP 在 Service 生命周期内保持稳定；删除并重建 Service 后不能假定仍是原地址。转发链路：
 
 ```mermaid
 flowchart LR
@@ -396,7 +387,7 @@ kubectl get pod -l app=order-service --show-labels    # 核对 Pod 实际标签�
 
 > ⏸️ **短期可以不学**：Operator 开发（用自定义控制器 + CRD 把「运维专家的操作经验」编码成自动化，如 etcd-operator / prometheus-operator）是平台工程方向的能力，业务开发主线不碰。**何时回来学**：你开始做平台工程、或要自研中间件管理时。**面试最低要求**：一句话——「Operator = 自定义控制器 + CRD，把人工运维动作自动化」。
 
-### 坑点提醒
+## 坑点提醒
 
 - **liveness 探依赖接口**：下游故障被放大成自我重启风暴（见 5.1，生产事故 Top 级）。
 - **镜像用 `latest`**：无法回滚到「上一个真正跑过的版本」，且缓存导致「改了不生效」的错觉。
@@ -411,6 +402,9 @@ kubectl get pod -l app=order-service --show-labels    # 核对 Pod 实际标签�
 - [ ] Service、Ingress、Spring Cloud Gateway 三层各自解决什么问题？
 - [ ] 滚动更新时怎么保证在途请求不丢？（preStop + graceful 双保险，能说清缺一不可的原因）
 - [ ] 能解释 requests 与 limits 的差异（调度依据 vs 运行上限）以及 OOMKilled 的由来
+- [ ] **场景判断**：新版本 Pod 能启动但尚未完成缓存预热，发布时却立即接流量并大量超时；能判断该调整哪类探针，并说明为什么不能用 liveness 代替
+
+> 自检答案要点：用 startup 探针保护启动阶段，用 readiness 探针表达“是否可以接流量”；liveness 只判断是否需要重启，配置过严会把仍在启动或暂时依赖异常的进程反复杀掉。还需结合滚动更新参数和优雅停机验证完整切流过程。
 
 ## 本节配套思考题
 
