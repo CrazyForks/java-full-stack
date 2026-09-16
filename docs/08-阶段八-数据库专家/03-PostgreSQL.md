@@ -1,11 +1,11 @@
 # PostgreSQL：从基础到资深进阶
 
 > 所属：阶段八 数据库专家
-> 定位：PostgreSQL 是**功能最全的开源关系型数据库**——在 MySQL 能力之上，多了 JSONB、窗口函数、地理（PostGIS）、丰富扩展。适合「既要关系型事务、又要 JSON/复杂分析/位置服务」的场景，常被当作 **MySQL 的功能更全替代**。**记住：绝大多数 OLTP 场景 PG 都够用，只有「纯追加、无关联、超海量写日志/时序」这类专用负载，才需要考虑专门的列存/时序库或 NoSQL。**
+> 定位：PostgreSQL 是功能丰富的开源关系型数据库，提供 JSONB、窗口函数、地理（PostGIS）和扩展生态。它适合「既要关系型事务、又要 JSON/复杂分析/位置服务」的场景；与 MySQL 的选择仍取决于查询模型、团队能力和运维条件。纯追加、时序或超大规模写入等专用负载，也应先用压测比较关系型方案与专用存储。
 
 ## 快速入门（能跑）
 
-### 核心关键词速查
+### 本讲关键词与概念速查
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
 | 表 | 行 + 列的二维结构 | `CREATE TABLE user` |
@@ -29,15 +29,17 @@ CREATE TABLE event_log (
 
 -- 插入 JSON + 查询(用 @> 包含操作符, 走 GIN 索引)
 INSERT INTO event_log (data) VALUES ('{"event":"page_view","uid":123}'::jsonb);
+CREATE INDEX idx_event_data ON event_log USING GIN (data);
 SELECT * FROM event_log WHERE data @> '{"event":"page_view"}'::jsonb;
 ```
 
 > **代码备注（逐行解释）**：
 > - `BIGSERIAL`：自增主键（等价 MySQL 的 AUTO_INCREMENT）。
-> - `JSONB`：**已解析的二进制 JSON**——可对整个列直接建 GIN 索引、按内部字段高效查询。MySQL 的 JSON 也能查内部（`->`/`JSON_EXTRACT`），但要建生成列+二级索引或多值索引兜底，且数组包含查询支持较晚——**PG 的 JSONB 是对整列建 GIN，更省事**。
+> - `JSONB`：**已解析的二进制 JSON**——可对整个列直接建 GIN 索引、按内部字段高效查询。MySQL 的 JSON 同样支持内部查询和多种索引路径（如生成列、函数索引或多值索引）；PG JSONB + GIN 对 `@>`、`?` 等包含查询常较直接，具体取舍仍看查询谓词、写入成本和团队经验。
 > - `text[]`：原生数组类型——PG 的亮点。
-> - `TIMESTAMPTZ`：带时区的时间戳——比 MySQL 的 DATETIME 更适合跨时区业务。
-> - `data @> '{"event":"page_view"}'`：**包含操作符**——JSON 里有没有这个字段值，走 GIN 索引。
+> - `TIMESTAMPTZ`：带时区语义的时间戳；跨时区业务可统一以它或等效的 UTC 存储策略表达时点，关键是明确展示层与存储层的时区约定。
+> - `data @> '{"event":"page_view"}'`：**包含操作符**——查询 JSON 是否包含字段值；本示例已创建 GIN 索引，实际是否选用仍以 `EXPLAIN (ANALYZE, BUFFERS)` 为准。
+> - **运行前提**：在 PostgreSQL 数据库中执行即可；示例只使用内建类型。`CREATE INDEX` 会在真实大表上消耗时间和空间，生产应在变更窗口或用并发建索引策略评估。
 
 ## 核心概念
 
@@ -48,7 +50,7 @@ CREATE INDEX idx_event_data ON event_log USING GIN (data);   -- GIN 索引支持
 SELECT data->>'user_id' AS uid FROM event_log;               -- ->> 取文本
 SELECT data->'event' FROM event_log;                         -- -> 取 JSON
 ```
-> **该怎么做**：字段常变、不想频繁 ALTER 的场景用 JSONB（如埋点、配置、表单）。
+> **该怎么做**：字段常变、不想频繁 ALTER 的场景可用 JSONB（如埋点、配置、表单）；对高频谓词再按查询操作符和基数选择 GIN 或表达式索引，GIN 也会增加写入和存储成本。
 > **不该怎么做**：JSONB 当普通关系用（那不如拆成规范列）；也别在 JSONB 里存必查但无索引的字段。
 > **为什么 JSONB 比 JSON 文本快**：`jsonb` 存入时就被解析成二进制结构并去重键名，查询不用每次重复解析、还能直接建索引；`json` 只是原样存文本，每次查询都要现场解析，也建不了整列索引。
 >
@@ -71,7 +73,7 @@ SELECT * FROM (
 ) t WHERE rn = 1;
 ```
 > **该怎么做**：「分组内取最新一条」「分组排名」用窗口函数一行搞定——这是写出优雅 SQL 的关键。
-> **不该怎么做**：用子查询或 app 层循环去实现「每组最新」——又慢又难维护。
+> **不该怎么做**：在没有验证执行计划时就把「每组最新」搬到应用层循环。窗口函数通常更清晰，但索引、数据量和过滤条件仍决定实际性能。
 
 ### 3. CTE（Common Table Expression）
 ```sql
@@ -111,8 +113,8 @@ flowchart TD
     D -->|"没有长事务卡着"| E["死元组清走<br/>空间可复用、表不膨胀"]
     D -->|"被长事务挡住"| F["死元组攒着清不掉<br/>表越来越胖、查询变慢"]
 ```
-> **该怎么做**：定期 `VACUUM`（或开 autovacuum），避免表膨胀（dead tuples 堆积）。
-> **不该怎么做**：长事务（`SELECT; 睡10分钟; COMMIT`）会阻断 VACUUM——连接池设 `idle_in_transaction_session_timeout` 上限。
+> **该怎么做**：保持 autovacuum 正常工作，并用统计信息和膨胀指标决定是否人工 `VACUUM (ANALYZE)`；不是把定期手工 `VACUUM` 当作常规替代。
+> **不该怎么做**：让长事务（`SELECT; 睡10分钟; COMMIT`）长期持有旧快照；它可能推迟死元组的最终回收并导致膨胀。连接池可设置 `idle_in_transaction_session_timeout` 上限。
 
 > **PG 与 MySQL 的 MVCC 差异（面试高频）**：两者都是 MVCC（Multi-Version Concurrency Control，多版本并发控制 = 读写各自看各自的版本，互不等待锁），但旧版本放哪不一样：
 > - **InnoDB**：旧版本写进 **undo log**（逻辑撤销日志，记录「怎么把某行改回去」），靠后台 **purge 线程**清理。
@@ -139,7 +141,7 @@ CREATE TABLE docs (
     content TEXT,
     embedding vector(1536)                -- 1536 维向量(OpenAI 等模型输出维度, 按模型定)
 );
-CREATE INDEX idx_docs_embedding ON docs USING hnsw (embedding vector_cosine_ops);  -- HNSW 索引(pgvector ≥0.5.0 才支持)
+CREATE INDEX idx_docs_embedding ON docs USING hnsw (embedding vector_cosine_ops);  -- 需安装支持 HNSW 的 pgvector 版本
 -- 查询: 找最相似的 5 条(余弦相似度)
 SELECT id, content, 1 - (embedding <=> :query_vec) AS similarity
 FROM docs ORDER BY embedding <=> :query_vec LIMIT 5;
@@ -150,10 +152,10 @@ CREATE INDEX idx_user_name ON "user" USING gin (name gin_trgm_ops);   -- LIKE '%
 ```
 > **代码备注（逐行解释）**：
 > - `vector(n)`：PGVector 的向量列类型；`CREATE EXTENSION vector` 后可用。
-> - `hnsw` 索引 + `vector_cosine_ops`：**HNSW 近似最近邻**索引，RAG 检索百万级向量也不慢。
+> - `hnsw` 索引 + `vector_cosine_ops`：**HNSW 近似最近邻**索引，以召回率换取查询速度；“百万级是否够快”取决于维度、过滤条件、索引是否在内存、`ef_search`、CPU 和延迟目标。pgvector 官方也明确说明 HNSW 会使用更多内存、构建更慢，并需在速度与召回率间调参，见 [pgvector HNSW 文档](https://github.com/pgvector/pgvector#hnsw)。
 > - `embedding <=> :query`：`<=>` 是**余弦距离操作符**，越小越相似——`ORDER BY ... LIMIT` 就是找最相似。
 > - `gin_trgm_ops`：让 `LIKE '%xx%'` 这类模糊查询也能走索引（trigram 方案）。
-> - **价值**：JSON、窗口、地理、向量都是 PG 扩展——**别为其中一个功能单独引入一个数据库**（先复用后新增原则）。
+> - **价值**：JSON、窗口、地理、向量等能力可在 PG 生态中组合使用；先评估复用现有 PG 能否满足延迟、容量、隔离和运维目标，再决定是否增加专用存储。
 
 > ⏸️ **短期可以不学**：自己写 PG 扩展（C 扩展、自定义数据类型/聚合函数）——这属于数据库内核开发范畴。**何时回来学**：团队需要自定义类型/函数、或要改 PG 源码做深度定制时。**面试最低要求**：能说出「PG 扩展机制 = `CREATE EXTENSION` 加载 .so 模块 + SQL 包装，常用扩展如 PostGIS / PGVector / pg_trgm」即可。
 
@@ -188,18 +190,18 @@ pg_basebackup -h 10.0.0.11 -U repl -D /var/lib/postgresql/standby -R
 > - 备库只读（`pg_is_in_recovery()=true`），可做读扩展 / 备份 / 高可用切换。
 > - **PG 主从**：备库读只读，主故障切到备库——写仍是单点（与 MySQL 同理）。
 
-> **生活版**：球赛解说员每说一句话，导播台都同步记成口播稿——备台照稿重念就能实时复播。若要保证一句都不错播，务必等备台回话「收到这句」才继续，代价是主台被架住、节奏变慢。
-> **换成 PG**：WAL（Write-Ahead Log，预写日志）=「先把流水账落盘、再改数据」的日志，崩了能按账重放；备库靠不断收到 WAL 并按流水账回放，来保持与主库同步。
+> **生活版**：球赛解说员每说一句话，导播台都同步记成口播稿——备台照稿重念就能实时复播。若要等备台回话「收到这句」才算完成，主台会被更慢的确认路径拖住。
+> **换成 PG**：WAL（Write-Ahead Log，预写日志）=「先把流水账落盘、再改数据」的日志，崩了能按账重放；备库不断接收并回放 WAL 来追随主库。类比只说明复制确认的延迟代价，不能替代对网络分区、确认级别和故障域的设计。
 >
 > **同步 vs 异步复制，怎么选**：
 > - **默认异步**：备库可能落后主库一点，主库崩溃可能丢最近几笔事务。
-> - **同步复制（Synchronous Replication）**：主库等备库确认收到 WAL 才提交，绝不丢数据——代价是写延迟上升，且备库故障会反过来拖住主库写入。
+> - **同步复制（Synchronous Replication）**：主库按 `synchronous_commit` 与同步备库配置等待相应确认，降低指定故障模型下的丢失窗口；确认级别不同，能覆盖的故障也不同，仍需备份和恢复演练。代价是写延迟上升，且备库故障可能拖慢或阻塞提交。
 > - **工程实践**：资金类场景可开同步或半同步折中；一般业务「异步 + Patroni」已足够。备库只读，正好兼做读扩展与热备。
 
 ### 2. 主从切换与高可用（Patroni）
 ```text
-PG 主从自动切换: 常用 Patroni(基于 etcd/consul 选主) —— 主挂了自动切到备库
-单库风险: 主库宕机即不可写, 必须配流复制 + 自动切换(Patroni)才谈得上高可用
+PG 主从自动切换: Patroni 是常用方案之一（基于 etcd/consul 等协调服务选主）——主挂后可提升备库
+单库风险: 主库宕机即不可写；是否需要流复制、自动切换和跨可用区部署由 RPO/RTO、预算与演练能力决定
 ```
 ```mermaid
 flowchart TD
@@ -208,7 +210,7 @@ flowchart TD
     C --> D["最合适的备库被提升为新主<br/>开始正常接写"]
     D --> E["应用经 VIP 或连接池<br/>几乎无感完成切换"]
 ```
-> **该怎么做**：生产 PG 用**流复制 + Patroni 自动切换**（选主），主故障自动接管，数据不丢（WAL 同步）。
+> **该怎么做**：对需要较高可用性的生产 PG，可采用流复制加 Patroni 等自动切换方案，并明确同步级别、旧主隔离（fencing）、客户端重连、**RPO（最多可丢失的数据时长）/RTO（恢复服务所需时长）** 和定期恢复演练；异步复制或不当切换仍可能有数据损失或脑裂风险。
 > **不该怎么做**：单 PG 裸奔——宕机即不可用。
 
 ### 3. 分区表（大表按时间拆）
@@ -238,11 +240,11 @@ SELECT * FROM logs WHERE created_at >= '2026-09-01' AND created_at < '2026-10-01
 
 ## 红线小结（必背）
 
-1. **PG 是功能更全的替代选项**：JSONB/窗口/扩展/地理都比 MySQL 强，但**不是严格超集**——简单高频 OLTP 场景 MySQL 运维生态更成熟；按团队能力与场景取舍。
-2. **JSONB 要建 GIN 索引**：否则包含查询还是慢。
+1. **PG 是功能丰富的关系型选项**：JSONB/窗口/扩展/地理等能力强，但不是 MySQL 的严格超集；按团队能力与场景取舍。
+2. **JSONB 索引跟着查询建**：包含查询常用 GIN，但要权衡写入和空间；以执行计划验证。
 3. **长事务是 PG 大忌**：阻断 VACUUM → 表膨胀 → 越来越慢。
 4. **能用 PG 一个顶多个**：JSON、窗口、地理、向量都能做——**别为一个功能引入一个新数据库**（这是「先复用后新增」原则）。
-5. **生产必须流复制 + 自动切换**：单 PG 裸奔宕机即不可用；用 Patroni 做选主。
+5. **高可用按 RPO/RTO 设计并演练**：流复制与 Patroni 是常见组合，不是脱离业务目标的固定配置。
 
 ## 进阶自测
 
@@ -253,12 +255,15 @@ SELECT * FROM logs WHERE created_at >= '2026-09-01' AND created_at < '2026-10-01
 - [ ] 能用 PGVector + HNSW 实现 RAG 向量检索
 - [ ] 能搭流复制（wal_level + pg_basebackup）并理解 Patroni 自动切换
 - [ ] 能列出 PG 常用扩展（PostGIS/PGVector/pg_trgm）及各自适用场景
+- [ ] 场景：一张 300 万行的向量表要按租户过滤后返回 Top 10，同时要求召回率可解释。能说明 HNSW 的索引、过滤、`ef_search`、内存和压测如何共同影响方案。
+
+> **核对要点**：HNSW 是近似检索，需用精确检索抽样衡量召回率；租户过滤可能减少候选，需要结合索引设计、迭代扫描或分区评估。不能只因“百万级”就承诺延迟或召回。
 
 ## 常见面试题
 
 ### Q1：MySQL 和 PostgreSQL 怎么选？底层有哪些关键差异？
 
-**答**：**标准结论**：MySQL 生态成熟、是国内事实标准；PG 功能天花板高（JSONB/窗口/PostGIS/pgvector/扩展），是「功能更全替代」。
+**答**：**标准结论**：MySQL 与 PG 都可承担 OLTP；MySQL 的生态和团队存量常是优势，PG 的 JSONB、窗口、PostGIS、pgvector 和扩展体系适合有这些明确需求的团队。
 
 **底层原理**，三点对比：
 - **MVCC 实现不同**：InnoDB 用 undo log 存旧版本；PG 把旧版本留在堆表，靠 VACUUM 回收。

@@ -3,9 +3,9 @@
 > 所属：阶段八 数据库专家
 > 定位：Neo4j 是**图数据库**——以「节点 + 关系 + 属性」建模，擅长**多跳关系查询**。适合「社交关系、推荐、反欺诈、知识图谱」场景。**记住：它是「关系」的专用引擎——只有当你需要多跳遍历（如「朋友的朋友的朋友」）时才值得用，简单一对多还是用关系型。**
 
-## 快速入门（能跑）
+## 快速入门
 
-### 核心关键词速查
+### 本讲关键词与概念速查
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
 | 节点（Node） | 一个实体 | 一个用户/一个商品 |
@@ -35,7 +35,7 @@ RETURN p2.name;
 > - `RETURN p2.name`：返回结果列。
 > - 对比 SQL：这在 SQL 里要自关联表多表 JOIN + 递归——图数据库用 `MATCH` 一行表达多跳关系。
 
-### Java 集成（Spring Data Neo4j）
+### Java 集成（Spring Data Neo4j，结构示意）
 ```java
 // Spring Data Neo4j: 用注解把实体映射成节点, 像操作普通对象一样查图
 import org.springframework.data.neo4j.core.schema.Id;
@@ -58,7 +58,8 @@ public interface PersonRepository extends Neo4jRepository<Person, Long> {
 > - `@Node("Person")`：把 Java 类映射成 Cypher 的 `:Person` 节点。
 > - `@Id`：节点主键；其余字段自动成为节点属性。
 > - `Neo4jRepository<Person, Long>`：Spring Data 的 Neo4j 仓库，`findByName(name)` 方法名即查询（自动生成 `MATCH (p:Person) WHERE p.name=$name RETURN p`）。
-> - **为什么这样好**：Java 后端用 Spring Data Neo4j，可像操作 JPA 一样操作图，无需手写 Cypher——对 Java 背景友好（与 Redis 的 Spring Data、Mongo 的 Driver 体例一致）。
+> - 这段只展示实体映射和派生查询的形态：运行它还需要 `spring-boot-starter-data-neo4j`、Neo4j 驱动连接配置，以及 `Person` 的构造器/访问器；`@Id` 代表应用自己赋值的标识，若由数据库生成还需按所选策略补充生成配置。
+> - **为什么这样好**：Java 后端用 Spring Data Neo4j，可像操作 JPA 一样操作图；复杂路径查询仍应根据查询计划选择派生查询或显式 Cypher。
 
 ## 核心概念
 
@@ -108,18 +109,18 @@ RETURN product, count(*) as score ORDER BY score DESC;
 ```
 > **该怎么做**：多跳（`*2..3`）、路径、推荐用 `MATCH` 加关系模式一行表达——这是图数据库的核心价值。
 > **不该怎么做**：用递归 JOIN 硬写多跳——图数据库就是为这个优化的。
-> **为什么图库多跳这么快**：关系型里"关系"靠外键 + 每次 JOIN 动态计算，每跳一层都要做一次自连接、在内存里造中间结果集，深度一上性能就崩；图库把"关系"作为**一等公民持久化落盘**（每条边直接存了源/目标节点的物理地址），遍历时沿关系的物理指针一跳一跳走，复杂度只与"经过的节点/关系数"有关，与全图数据量无关——所以"朋友的朋友的朋友"在千万级节点上也能毫秒级返回。
+> **为什么图库常适合多跳**：关系型将关系表示为表和连接条件，深度和扇出增长时，中间结果与连接代价可能迅速上升；Neo4j 将关系作为存储和查询模型的一部分，遍历通常从已定位的起点沿相关关系扩展。实际代价仍取决于起点选择性、关系扇出、跳数、筛选、索引、缓存和硬件；必须用 `PROFILE` 与真实数据验证，不能由全图节点数或「几跳」单独推断延迟。
 
 ```mermaid
 flowchart TD
     A["找「朋友的朋友都有谁」<br/>一条多跳遍历"] --> B{"这条查询<br/>在不同库怎么执行?"}
-    B -- 图库 --> C["沿关系物理指针走<br/>一跳一跳<br/>代价=经过的节点/关系数"]
-    C --> D["千万级节点也毫秒级返回<br/>与全图大小无关"]
+    B -- 图库 --> C["从起点沿关系模式扩展<br/>代价受访问边、扇出与筛选影响"]
+    C --> D["代价受局部扇出、跳数、筛选与缓存影响<br/>用 PROFILE 和压测验证"]
     B -- 关系型 --> E["每跳做一次自连接 JOIN<br/>内存造中间结果集"]
-    E --> F["3-4 跳性能就崩<br/>递归 CTE 本质也是逐跳扫描"]
+    E --> F["代价受连接条件、数据分布与中间结果影响<br/>用执行计划验证"]
 ```
 
-> 🏠 **生活版 → 换成图数据库**：你要找「张三的朋友里谁也认识李四」——自己翻开手机通讯录，张三 → 翻他通讯录里每个人 → 再翻这些人的通讯录……每翻一层就是一个「跳」；图库做这件事跟很多人认识谁无关，见到谁就顺着『关系』往下翻，所以再多人也快。**换成 Neo4j**：关系的读取是沿持久化的物理指针直接走，不走 JOIN——这就是「多跳查询图库是主场」的直觉。
+> 🏠 **生活版 → 换成图数据库**：你要找「张三的朋友里谁也认识李四」——从张三开始翻通讯录，再翻这些人的通讯录；每多一层，候选人也可能成倍增加。**换成 Neo4j**：从已定位节点沿关系模式遍历，能直接表达这类查询；但高扇出和不设跳数上限仍会扩大搜索空间，所以必须限制路径、筛选和结果数。这里的类比只说明查询形态，不承诺任何固定性能。
 
 ### 4. 索引与约束（Neo4j 5.x 语法）
 ```cypher
@@ -141,6 +142,8 @@ CREATE FULLTEXT INDEX person_names IF NOT EXISTS FOR (n:Person) ON EACH [n.name]
 
 > **注意**：运行 GDS 算法**必须先创建图投影**（`gds.graph.project`），否则 `'graph'` 不存在会报错。
 
+> 以下是 GDS 结构示意，不能只把它粘进空白 Neo4j 实例运行：需要安装与 Neo4j 版本兼容的 GDS 库、已有 `Person` / `FRIENDS_WITH` 数据，并在重复执行前处理同名的内存图投影。GDS 当前更推荐使用 Cypher projection；算法参数与可用版本以 [GDS 官方文档](https://neo4j.com/docs/graph-data-science/current/getting-started/basic-workflow/) 为准。
+
 ```cypher
 // ① 先做图投影: 把 Person 节点 + FRIENDS_WITH 关系投影成一个命名图 'graph'
 CALL gds.graph.project('graph', 'Person', 'FRIENDS_WITH');
@@ -149,44 +152,44 @@ CALL gds.graph.project('graph', 'Person', 'FRIENDS_WITH');
 CALL gds.pageRank.stream('graph') YIELD nodeId, score
 RETURN nodeId, score ORDER BY score DESC;
 
-// ③ 最短路径: 找两人之间的最短关系链 (必须带算法名 dijkstra; sourceNode/targetNode 传节点 id)
+// ③ 最短路径: 找两人之间的最短关系链（sourceNode/targetNodes 可传匹配到的节点）
 MATCH (a:Person {name:'张三'}), (b:Person {name:'李四'})
 CALL gds.shortestPath.dijkstra.stream('graph',
-    { sourceNode: id(a), targetNode: id(b), relationshipTypes: ['FRIENDS_WITH'] })
+    { sourceNode: a, targetNodes: [b], relationshipTypes: ['FRIENDS_WITH'] })
 YIELD path RETURN path;
 
 // ④ 连通分量: 找独立的社群/团伙
 CALL gds.louvain.stream('graph') YIELD nodeId, communityId RETURN nodeId, communityId;
 ```
 > **该怎么做**：社区发现（Louvain）、重要度（PageRank）、最短路径用 GDS 算法库——这些是图数据库独有的能力。
-> **不该怎么做**：不先 `gds.graph.project` 就直接跑算法（图不存在会报错）；`sourceNode/targetNode` 误传 Cypher 节点变量（应传 `id(...)`）。
+> **不该怎么做**：不先创建图投影就直接跑算法，或不核对 GDS 当前版本的参数类型与算法语义。
 
-### 6. 高可用：因果集群（Causal Cluster，Core / Read Replica）
+### 6. 高可用：集群中的 Primary / Secondary（Neo4j 5 当前术语）
 
-> ⏸️ **短期可以不学**：Neo4j 生产集群的部署运维细节（core 节点规划、read-replica 数量、Raft 配置）等真要上线图服务再学。**何时回来学**：负责 Neo4j 生产环境部署/扩容时。**面试最低要求**：能说出"≥3 个 core 节点用 Raft 选主保高可用、read-replica 只读扩展读、写不可横向扩展"。
+> ⏸️ **短期可以不学**：集群拓扑命令、跨地域部署和 Raft 参数属于部署运维细节。**本讲仍要掌握**：primary / secondary 是数据库副本角色；写由当前 writer primary 处理；secondary 异步复制并用于读扩展；多 primary 用多数派换取写可用性。**何时回来学**：负责 Neo4j 生产部署、扩容或读写路由时。
 
 ```cypher
-// Neo4j 因果集群: 核心节点(写+容错) + 只读副本(读扩展)
-// cluster mode: core + read-replica —— 核心挂了自动选新核心, 只读副本可横向扩展读
-// 配置: 多个 core(≥3, Raft 多数派) 负责写; read-replica 只读, 扛读流量
-// 注: 5.x 后术语倾向用 primary/secondary, "causal cluster" 概念被新架构演进(以官方文档为准)
+// 架构示意，不是可直接执行的 Cypher 配置：
+// 一个数据库可以有多个 primary 副本，其中当前只会选出一个 writer；
+// secondary 从 primary 异步接收事务日志，通常承接可容忍延迟的读。
+// 实际创建/调整拓扑使用管理员命令和服务器配置，按 Neo4j 当前 Operations Manual 核对。
 ```
-> **该怎么做**：生产用**因果集群**（≥3 个 core 节点保证高可用 + read-replica 横向扩展读）；写走 core、读走 read-replica。
-> **不该怎么做**：单节点裸奔——宕机即不可用。核心节点用**奇数个**（3 或 5），偶数个容错能力不变反而浪费。
-> **机制**：core 节点之间用 **Raft 共识协议（Raft）** 选举出唯一 leader 负责写，事务日志同步复制给其他 core，read-replica 异步拉取日志追赶。注意区分**共识（Consensus）与一致性（Consistency）**：Raft 保证的是"节点对谁是 leader 达成一致"（选主不分裂），并不保证任意时刻所有节点数据相同——读 read-replica 可能读到复制延迟的旧数据。
+> **该怎么做**：按每个数据库的可用性目标设计 primary 数量；要容忍 1 个 primary 故障仍可写，通常至少需要 3 个 primary（`M = 2F + 1`）。让驱动依据路由表把写送到当前 writer，把可容忍延迟的读分给 secondary 或非 writer primary。
+> **不该怎么做**：把旧的 `core / read-replica` 术语当成 Neo4j 5 的唯一模型，或把 secondary 当作最新读的默认保证。单 primary 也可运行，但不具备写故障容忍。
+> **机制**：每个数据库的 primary 组成独立 Raft 组，当前会选出一个 writer；writer 对 primary 推送事务，达到所需确认后提交。secondary 通过事务日志异步追赶，因此新提交不一定立刻可见。Raft 同时处理选主、日志顺序与安全性；某次读是否具有读己之写或线性一致语义，还取决于驱动路由和读协议。
 
 ```mermaid
 flowchart TD
-    APP["应用"] -->|"写请求"| LEADER["core leader<br/>唯一写入口<br/>所有写在它上串行落日志"]
-    LEADER --> C2["core 2<br/>Raft 同步复制日志"]
-    LEADER --> C3["core 3<br/>Raft 同步复制日志"]
+    APP["应用驱动按路由表选择端点"] -->|"写请求"| LEADER["writer primary<br/>该数据库当前唯一 writer"]
+    LEADER --> C2["primary 副本<br/>参与 Raft 与提交确认"]
+    LEADER --> C3["primary 副本<br/>参与 Raft 与提交确认"]
     C2 -. 多数派选举 + 容错 .-> C3
-    APP -->|"读请求"| RR["read-replica 池<br/>只读、异步追日志<br/>可横向扩展读"]
+    APP -->|"可容忍延迟的读"| RR["secondary / 非 writer primary<br/>读扩展；secondary 异步追日志"]
     C3 -. 异步拉日志 .-> RR
     RR -. 复制延迟窗口<br/>可能读到旧数据 .-> C2
 ```
 
-> 🏠 **生活版 → 换成 Neo4j 因果集群**：公司里只有总经理拍板（写走唯一 leader），几个副总（core）随时对齐、总经理空缺时多数票选出新的；普通员工（read-replica）只看文件、随叫随加（读扩展）。**换成 Neo4j**：core 用 Raft 多数派保证「选主不分裂 + 写不丢」，read-replica 横向扩展读但容忍复制延迟——这就是「写不可横向扩展、读可以」的直觉。
+> 🏠 **生活版 → 换成 Neo4j 集群**：同一份制度只能由当前负责人签发，几位负责人共同留档；普通查阅员拿到的是稍后同步的副本。**换成 Neo4j**：一个数据库当前只有一个 writer primary 来排定写入顺序，多 primary 提供容错，secondary 承接异步读扩展。它不让同一数据库的多台机器并行成为 writer；若要提升整体写能力，还需结合数据拆分、模型与业务架构评估。
 
 ## 场景与红线（怎么做 / 不该怎么做）
 
@@ -205,7 +208,7 @@ flowchart TD
 2. **什么时候用 Neo4j**：明确需要「多跳关系、路径、图算法」——社交/推荐/反欺诈/知识图谱。
 3. **别过度用**：简单一对多、纯聚合统计用关系型/PG/ES 更合适（图数据库维护成本高）。
 4. **建模用节点 + 关系**：关系是边，不是节点/属性。
-5. **生产用因果集群**：≥3 核心节点多数派写 + read-replica 读扩展——单节点别当线上。
+5. **集群按目标选拓扑**：3 个 primary 可容忍 1 个 primary 故障仍写；secondary 用于异步读扩展，读写路由由驱动和一致性要求决定。
 6. **核心判断**：先问「我的查询是多跳关系吗？」是→Neo4j；不是→关系型。
 
 ## 进阶自测
@@ -214,8 +217,11 @@ flowchart TD
 - [ ] 能用 Cypher 创建节点 + 关系 + 属性
 - [ ] 能写多跳查询（`*2..3`）表达「朋友的朋友」
 - [ ] 能用 GDS 算法（PageRank/最短路径/Louvain）做分析
-- [ ] 能说清因果集群（core + read-replica）如何高可用与读扩展
+- [ ] 能说清 primary / secondary、writer、Raft 与读写路由各自负责什么
 - [ ] 能说出图数据库的核心价值（多跳遍历）与适用场景（社交/推荐/反欺诈）
+- [ ] 场景：风控查询必须看到刚写入的黑名单关系，普通推荐允许数秒旧数据。能判断前者不能默认路由到 secondary，后者可由 secondary 分担，并说明还需用驱动路由和压测验证。
+
+> **核对要点**：关键读取应使用写访问模式路由到当前 writer，或正确传递 bookmark，利用驱动会话的因果一致性保证读到已确认的写入；允许旧数据的推荐查询可由 secondary 分担。最终还要结合版本、集群拓扑和真实负载验证路由与延迟。
 
 ## 常见面试题
 
@@ -227,7 +233,7 @@ flowchart TD
 
 适合多跳关系查询的场景——社交网络、反欺诈资金链路、知识图谱、推荐。**例外**：简单一对多、纯聚合统计用关系型更合适。
 
-**底层原理**：关系型里关联深度不确定时（「朋友的朋友的朋友」），SQL 要用递归 CTE 或多次 JOIN，每跳一层都是昂贵的连接计算，深度 3-4 跳性能就崩；图库把关系按**物理指针**落盘，遍历沿指针一跳一跳走，代价与经过的节点/关系数成正比，与全库规模无关。
+**底层原理**：关联深度和关系扇出不确定时，关系型的递归 CTE 或多次 JOIN 可能产生较大的中间结果；图模型可以把路径模式直接交给遍历执行。遍历开销受起点、过滤、跳数、关系扇出、索引和缓存共同影响，不能用「超过几跳一定慢」或「与全库规模无关」替代执行计划和压测。
 
 **工程实践**：
 - 真实系统常见**混合架构**——主数据在关系型，关系密集的查询面（好友链、团伙识别）放图库并保持同步；
@@ -258,11 +264,11 @@ flowchart TD
 
 ### Q4：Neo4j 怎么做高可用？为什么写不能横向扩展？
 
-**答**：**标准结论**：Neo4j 生产用集群——多个 core（核心节点，≥3，通常是 3 或 5）组成多数派负责**写与容错**，read-replica 只读副本**横向扩展读**；core 之间用 Raft 共识协议自动选主，主挂自动切换。5.x 后术语演进为 primary/secondary。
+**答**：**标准结论**：Neo4j 当前将数据库副本称为 primary / secondary。多个 primary 可组成多数派以提高该数据库的写可用性；当前只有一个 primary 被选为 writer。secondary 异步复制，通常用于读扩展。要容忍 1 个 primary 故障仍可写，通常使用 3 个 primary；实际拓扑按每个数据库的容错目标确定。
 
-**底层原理**：写操作必须在**单一 leader** 上执行——所有写按同一顺序落日志并复制，多节点同时写无法保证全局一致的事务顺序；Raft 解决的正是「多个 core 对谁是 leader 达成共识」，**多数派存活才能选出唯一主，所以 core 用奇数个**。read-replica 不参与选主，异步拉取事务日志追赶，扩展读但**可能读到延迟数据**。
+**底层原理**：Raft 为每个数据库的 primary 组维护选主、日志顺序和安全性；writer 对写入排序并等待所需 primary 确认。secondary 异步拉取事务日志，因此可能读到较旧的数据。多 primary 提高容错，并不使同一数据库同时存在多个 writer 来线性增加写吞吐。
 
 **工程实践**：
-- 写单点是几乎所有「强一致 + 事务」存储的共性（MySQL、MongoDB、PG 亦然），突破要付出弱一致/分区代价——这正是「因果集群不是水平写扩展」的含义；
-- 生产：写走 core、读走 read-replica，监控复制延迟。
-- 面试答出「写单点换一致性」的取舍即可。
+- 不要把所有数据库都概括为「写单点」：分片、分区、多数据库和不同一致性协议会改变扩展方式；这里仅说明一个 Neo4j 数据库的 writer 语义。
+- 生产：使用支持路由的驱动，按读的新鲜度要求选择 writer、非 writer primary 或 secondary，并监控复制延迟。参见 [Neo4j 集群架构](https://neo4j.com/docs/operations-manual/current/clustering/introduction/) 与 [路由说明](https://neo4j.com/docs/operations-manual/current/clustering/setup/routing/)。
+- 面试答出「同一数据库当前 writer 排序写入、多 primary 提供容错、secondary 扩展异步读」及其路由取舍即可。

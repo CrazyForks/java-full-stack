@@ -1,11 +1,11 @@
 # MongoDB：从基础到资深进阶
 
 > 所属：阶段八 数据库专家
-> 定位：MongoDB 是**文档型 NoSQL**——以 JSON 风格的文档存数据，schema 灵活、水平扩展容易。适合「字段常变、海量写入、快速迭代」场景。**记住：它牺牲了强事务和复杂关联，换来灵活 schema 和水平扩展——选它前先确认你真的不需要复杂关联事务。**
+> 定位：MongoDB 是**文档型 NoSQL**——以 JSON 风格的文档存数据，schema 灵活、可通过分片水平扩展。适合「字段常变、以文档聚合读写为主、快速迭代」的场景。它支持多文档事务，但事务、跨文档关联与分布式一致性都有成本；选型前先确认文档模型是否匹配访问模式。
 
 ## 快速入门（能跑）
 
-### 核心关键词速查
+### 本讲关键词与概念速查
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
 | 数据库 | 命名空间 | `shop` |
@@ -14,15 +14,16 @@
 | ObjectId | 自动生成的主键 | `_id` |
 | schema 灵活 | 每文档字段可不同 | 一条有 address、一条没有 |
 | 索引 | 加速查询 | `{user_id:1}` |
-| 副本集 | 高可用 | 主从自动切换 |
+| 副本集 | 高可用 | 主节点故障后自动选举新主 |
 | 分片集群 | 水平扩展 | 海量数据 |
 
 ### 最简可运行示例
-```javascript
+```java
 // 用 MongoDB Java Driver 读写(带详细注释)
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import org.bson.Document;
+import org.springframework.stereotype.Service;
 
 @Service
 public class UserStore {
@@ -47,12 +48,14 @@ public class UserStore {
 }
 ```
 
+> **运行前提**：这是可嵌入 Spring Boot 应用的 Java 片段，不是独立 `main` 程序。需引入 MongoDB Java Driver、配置可用的 `MongoClient` Bean 和连接串；`@Service` 来自 Spring。代码未展示连接池、超时、索引、schema 校验与异常处理，生产环境应按业务补齐。
+
 > **代码备注（逐行解释）**：
 > - `MongoClient`：MongoDB 客户端（自动注入），连接即可用。
 > - `getDatabase("shop").getCollection("users")`：定位到「数据库.集合」（≈ 库.表）。
 > - `new Document("name", name).append("age", age)`：**文档即 JSON**——字段灵活，不用预先定义 schema。
 > - `insertOne(doc)`：插入一条；`find(...).first()`：查第一条；`find(...)` 返回游标可遍历。
-> - **`_id` 自动生成**：若不指定，Mongo 自动生成 ObjectId——就是主键。ObjectId 是 12 字节（时间戳 + 机器/进程标识 + 自增计数），**各节点无需协调即可生成全局唯一值**，且大致按时间递增——这就是分布式写入不需要"自增主键"的原因。
+> - **`_id` 自动生成**：若不指定，服务端会生成 ObjectId 作为 `_id`。当前 ObjectId 是 12 字节：4 字节时间戳、5 字节随机值、3 字节递增计数器；它通常按生成时间递增，但不是严格的全局时间顺序，也不应把可读时间当业务排序依据。[官方 BSON 类型文档](https://www.mongodb.com/docs/manual/reference/bson-types/#objectid)
 > - 对比 MySQL：**无需先建表**，插入第一条文档就自动建了集合——这是 schema-less 的魅力。
 
 ## 核心概念
@@ -62,7 +65,7 @@ public class UserStore {
 |-|-|-|
 | 结构 | JSON 文档，字段灵活 | 表，强 schema |
 | 关联 | 文档内嵌或引用 | JOIN |
-| 事务 | 文档级原子（事务有限） | ACID 全支持 |
+| 事务 | 单文档原子；支持多文档事务 | ACID 事务与复杂关联是常见强项 |
 | 扩展 | 分片，水平扩展容易 | 主从/分库分表 |
 > **该怎么做**：字段常变、一对一内嵌、海量写入用 MongoDB。
 > **不该怎么做**：复杂多表关联、强事务（如支付）用 MongoDB——那是 MySQL 的地盘。
@@ -139,7 +142,7 @@ result.forEach(doc -> System.out.println(doc));          // 迭代结果
 
 ### 3. 副本集（Replica Set，高可用，生产标配）
 ```javascript
-// 副本集 rs0: 1主2从, 主挂了自动选新主 —— 生产必须
+// 副本集 rs0: 1 主 2 从，主故障后自动选举新主；线上按可用性目标配置
 // 连接串: mongodb://host1,host2,host3/?replicaSet=rs0
 // 读偏好(readPreference): 让读走从库分担压力
 // mongodb://hosts/?replicaSet=rs0&readPreference=secondaryPreferred
@@ -165,13 +168,13 @@ sequenceDiagram
     从A->>从A: 当选新主，接管写请求
 ```
 
-> **该怎么做**：生产用副本集（≥3 节点，1 主 2 从），主故障自动切换；`readPreference=secondaryPreferred` 让读走从库。
+> **该怎么做**：生产拓扑通常至少使用 3 个可投票、承载数据的成员；具体节点数、跨可用区布局与读偏好取决于可用性目标和预算。`secondaryPreferred` 只适合可容忍陈旧数据的读。
 > **不该怎么做**：单节点裸奔——宕机即不可用。
 > **读写一致性三件套（面试重点）**：副本同步本质是**最终一致性**——主库确认写成功后，从库还在异步"追赶"（拉取并重放 oplog），此刻读从库可能读到旧数据。
 > - **读偏好（readPreference）**：只决定"读路由到哪台机器"，**不保证读到最新**。
-> - **写关注（Write Concern）**：写操作要求多少节点确认。默认 `w: 1` 是主库落盘即返回——若主库随即宕机，**还没复制到从库的写入就丢了**；`w: majority` 要求多数派节点确认才算成功，用一点延迟换"不丢数据"。
-> - **读关注（Read Concern）**：读操作要求的版本。`readConcern: majority` 只读已被多数派确认的数据，避免读到半路版本。
-> 工程上：核心写用 `w: majority`；可容忍稍旧的读用 `secondaryPreferred`；"写完立刻读"的强一致场景直接读主库。
+> - **写关注（Write Concern）**：写操作要求多少节点确认。`w: 1` 是主库本地应用该写后即可确认，**不等于已经写入磁盘**；是否等待 journal 由 `j` 和部署配置决定。`w: "majority"` 等待多数派确认，但 journal 语义还受 `writeConcernMajorityJournalDefault` 和版本/存储引擎配置影响；对明确要求磁盘持久性的写应显式评估 `{ w: "majority", j: true }` 与延迟预算。[官方副本集写关注](https://www.mongodb.com/docs/manual/core/replica-set-write-concern/)
+> - **读关注（Read Concern）**：读操作要求的版本。`readConcern: "majority"` 读取多数派已确认的数据；它不等于任意请求的线性一致读，也不能替代正确的读偏好与会话设计。
+> 工程上：核心链路根据 RPO/RTO、读写延迟与部署配置选择写关注和读关注；可容忍稍旧的读才用 `secondaryPreferred`。需要读到刚完成写的因果结果时，使用正确的会话/读关注组合或读主库，不能只凭「写完读主」口头保证。
 
 ### 4. 分片集群（水平扩展）
 
@@ -205,7 +208,7 @@ flowchart TD
 
 ### 5. 事务（有限）
 ```javascript
-// 副本集/分片集群下支持多文档事务(4.0+)
+// 副本集支持多文档事务；分片集群的支持版本和限制以当前官方文档为准
 try (var session = mongoClient.startSession()) {   // 用注入的 mongoClient 开会话
     session.startTransaction();
     collection1.insertOne(doc1, session);        // 第1个操作: 传 session 进事务
@@ -213,7 +216,7 @@ try (var session = mongoClient.startSession()) {   // 用注入的 mongoClient �
     session.commitTransaction();                 // 全部成功才提交, 任一失败回滚
 }
 ```
-> **该怎么做**：确实需要强一致 + 多文档操作时，用事务（4.0+，需副本集/分片）。
+> **该怎么做**：确实需要原子地提交多个文档时，用事务，并设置与业务目标匹配的 transaction options（read concern、write concern、read preference）。事务支持的部署条件与版本限制以[官方事务文档](https://www.mongodb.com/docs/manual/core/transactions/)为准。
 > **不该怎么做**：能不用就不用——事务会降低性能；**且事务内每个操作都必须传 `session`**，漏传的操作不在事务里。
 
 ## 进阶补充：内嵌 vs 引用建模（文档模型的核心决策）
@@ -248,14 +251,14 @@ Document user = new Document("name", "张三").append("orderIds", List.of("O1", 
 | 动态字段/灵活 JSON 文档 | MongoDB 文档 | 强 schema 数据库（字段常变改起来痛苦） |
 | 用户画像（字段多变） | MongoDB | 频繁 ALTER |
 | 复杂关联报表 | MySQL/PG | MongoDB（关联弱） |
-| 强事务核心业务（支付） | MySQL/PG | MongoDB（多文档事务 4.0+ 支持，但不如 MySQL 久经考验） |
+| 强事务核心业务（支付） | 选能满足账务、审计与一致性要求的方案 | 仅因 MongoDB 有多文档事务就忽略完整账务设计 |
 | 海量写入 + 水平扩展 | MongoDB 分片 | 单机 MySQL 硬扛 |
 
 ## 红线小结（必背）
 
 1. **schema 灵活是双刃剑**：字段常变就用它，需要强约束强事务就别用。
 2. **严格用索引**：否则全集合扫描。
-3. **生产必须副本集**：单节点不能当线上；读偏好 secondaryPreferred 分担读。
+3. **线上需要副本集与备份策略**：单节点只适合作为开发或明确可接受单点风险的场景；`secondaryPreferred` 仅用于可容忍陈旧数据的读。
 4. **聚合统计用管道**：`$match/$group/$sort` 在库内完成，别拉全量到内存算。
 5. **关联/事务慎重**：Mongo 不强在这——优先 MySQL/PG。
 6. **什么时候用 MongoDB**：字段常变 + 海量写入 + 快速迭代——三个特征同时满足才值得。
@@ -269,6 +272,10 @@ Document user = new Document("name", "张三").append("orderIds", List.of("O1", 
 - [ ] 能说清 ObjectId 是什么、为什么自动生成
 - [ ] 能设计副本集（1主2从 + 读偏好）与分片键选择
 - [ ] 能判断「什么时候该用 MongoDB、什么时候该用 MySQL」（核心判断力）
+
+> **场景迁移核对**：订单创建后必须让同一用户紧接着读取到该订单，同时还要容忍副本节点故障。不能只写「读主库」。
+>
+> **核对要点**：先明确 RPO/RTO 与延迟目标；写关注至少讨论 `w: "majority"` 和 journal 配置，读取根据需要选择多数派读关注或因果一致会话；若是跨文档不变量，再评估事务及其事务级配置。
 
 ## 常见面试题
 
@@ -284,7 +291,7 @@ Document user = new Document("name", "张三").append("orderIds", List.of("O1", 
 
 **底层原理**：
 - MongoDB 靠文档内嵌（Embed）建模：一对一/一对少数据一次查询拿全、无需 JOIN；而 MySQL 关联依赖 JOIN，schema 变更要 ALTER 表。
-- MongoDB 事务 4.0+ 才有，且依赖副本集多数派确认，性能与成熟度都不如 MySQL 久经考验。
+- MongoDB 支持单文档原子写与多文档事务；多文档事务需评估部署条件、事务时长和吞吐代价。是否采用事务取决于不变量与访问模式，不能只因使用 MongoDB 就假定没有事务。
 - `$lookup` 关联的心智成本和性能也高于 SQL JOIN。
 
 **工程实践**：
@@ -301,9 +308,9 @@ Document user = new Document("name", "张三").append("orderIds", List.of("O1", 
 **底层原理**：
 - MySQL InnoDB 事务靠 redo/undo log + MVCC 多版本（多版本并发控制）。
 - MongoDB 事务依赖 WiredTiger 存储引擎的快照，加上副本集 oplog 复制（WiredTiger 是 MongoDB 的默认存储引擎，角色≈InnoDB 之于 MySQL）。
-- 提交要等多数派节点确认（Write Concern）才算数——**事务持久性与复制强绑定**，比 MySQL 多了"跨节点确认"这一步，所以更慢。
+- 事务提交是否等待多数派、是否等待 journal，取决于事务/客户端设置和部署默认值；需要抗回滚的保证时，应显式核对 write concern、journal 与 read concern 的组合。跨节点复制和事务资源占用都会影响延迟与吞吐。
 
-**工程实践**：MongoDB 事务"能用但别滥用"——优先用"单文档 + 内嵌建模"把多步操作压进一次写（单文档写本身原子），真需要多文档一致再开事务；支付等核心资金场景仍应选 MySQL。面试加分点：能说出"Mongo 事务的提交要等副本确认"，说明你懂底层而不只是会背版本号。
+**工程实践**：优先通过「单文档 + 合理内嵌」承载天然原子的不变量；真需要多文档一致再开事务，并测量事务时长、冲突与提交延迟。支付等核心资金场景通常需要更完整的账务、审计和一致性设计，不能仅凭存储类型下结论。
 
 ### Q3：BSON 和 JSON 有什么区别？
 
@@ -315,7 +322,7 @@ Document user = new Document("name", "张三").append("orderIds", List.of("O1", 
 - BSON 在 JSON 基础上增加 Date、Binary、Decimal128、ObjectId 等类型。
 - 每个字段带类型标签和长度前缀，扫描时按偏移定位、无需解析字符串。
 - 省去引号花括号等冗余字符，体积更小。
-- ObjectId 是 BSON 特有的 12 字节类型（时间戳 + 机器标识 + 进程 + 自增），让各节点无需协调就能生成唯一 `_id`。
+- ObjectId 是 BSON 的 12 字节类型（4 字节时间戳 + 5 字节随机值 + 3 字节递增计数器）。它适合作为默认标识，但不应用其生成时间替代业务排序字段。
 
 **工程实践**：
 - 日常写代码不用关心 BSON——Java Driver 的 `Document` 自动序列化。
@@ -354,9 +361,9 @@ Document user = new Document("name", "张三").append("orderIds", List.of("O1", 
 **底层原理**：
 - 主库把每次写记录进 oplog，从库拉取重放实现复制——本质是**最终一致性**，从库永远在追赶。
 - 选主用类似 Raft 的多数派机制，网络分区下只有多数派一侧能选出主，避免双主。
-- 默认 `w:1` 主库确认即返回，若主库随即宕机，未复制到从库的写入就丢了；`w:majority` 要多数派确认才提交，防丢数据但写延迟更高。
+- `w:1` 在主库本地应用后即可确认，不代表已落盘或已复制；主库故障时未复制的写可能回滚。`w:"majority"` 等待多数派确认，但 journal 语义还要结合 `j` 与 `writeConcernMajorityJournalDefault` 判断。
 
 **工程实践**：
-- 生产 ≥3 节点（1 主 2 从）；核心写 `w:majority`。
-- 读用 `secondaryPreferred` 分担流量（可容忍稍旧）；"写完立刻读"的强一致场景读主库。
+- 生产常用至少 3 个数据承载投票成员；核心写根据 RPO/RTO 明确 `w`、`j` 与默认配置。
+- 读用 `secondaryPreferred` 分担流量（可容忍稍旧）；需要因果可见或多数派已确认数据时，设置相应会话与 read concern，必要时读主库。
 - 高频追问："读偏好能保证读到最新吗？"——不能，它只管路由，一致性要看写关注 + 读关注。

@@ -5,7 +5,7 @@
 
 ## 快速入门（能跑）
 
-### 核心关键词速查
+### 本讲关键词与概念速查
 | 关键词 | 一句话大白话 | 例子 |
 |-|-|-|
 | 索引（Index） | ≈ 数据库表 | `products` |
@@ -21,6 +21,7 @@
 // 用 Elasticsearch Java Client 查询(带详细注释)
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
+import org.springframework.stereotype.Service;
 
 @Service
 public class ProductSearch {
@@ -39,6 +40,8 @@ public class ProductSearch {
     }
 }
 ```
+
+> **运行前提**：这是可嵌入 Spring Boot 应用的查询片段，不是独立 `main` 程序。需引入与 ES 服务端兼容的 Java Client、配置 `ElasticsearchClient` Bean、创建 `products` 索引及下文 mapping；`Product` 是与返回 JSON 对应的 POJO/record，示例省略其字段定义。若只想验证 DSL，先用下文的 JSON 请求在 Dev Tools 执行。
 
 > **代码备注（逐行解释）**：
 > - `client.search(...)`：发起搜索请求。
@@ -65,13 +68,13 @@ flowchart LR
 ```
 | 分词器 | 用途 | 说明 |
 |-|-|-|
-| `ik_max_word` | 最细粒度切分 | 索引端收录词最全，避免漏搜 |
-| `ik_smart` | 智能切分 | 更精准，词更少 |
+| `ik_max_word` | IK 插件提供的细粒度切分 | 只是中文方案之一，需自行安装与维护插件 |
+| `ik_smart` | IK 插件提供的较粗粒度切分 | 常与 `ik_max_word` 组合，效果须用真实语料评估 |
 
 > **类比一下（词典 vs 逐页翻书）**：生活版——一本 500 页的书想找「手机」这个字，从头一页页翻是全文苦力；出版社在书尾印「索引表」，把「手机」直接标在第几页，一查就到。换成 ES/MySQL——MySQL 是按列排好队、点对点查值；ES 把每篇文档先切词，维护一张「词 → 文档号」的索引表，查询直接命中——图见上方流程块。
 
-> **该怎么做**：中文用 IK 分词，**索引端与搜索端保持一致**（最稳）——否则两端分词粒度不同，查询词切出来的 token 对不上索引里已有的 token，会「漏搜/误搜」。
-> **常见组合**：① 索引 `ik_max_word` + 搜索 `ik_smart`（收录全、查询准，但需理解粒度差异）；② 两端统一用 `ik_max_word`（最不易踩坑）。
+> **该怎么做**：中文先用真实查询词评估分词器；IK 是常见插件之一，不是 ES 内置或唯一方案。索引端与搜索端可相同，也可有意采用不同粒度（如索引 `ik_max_word`、搜索 `ik_smart`），关键是用召回率、误召回与运营词典验证，而不是机械地追求一致。
+> `text` 字段做全文、`keyword` 字段做精确/排序。分词器和插件的可用性以所用 ES 版本及官方/插件兼容矩阵为准。
 > `text` 字段做全文、`keyword` 字段做精确/排序。
 
 > ⏸️ **短期可以不学**：倒排索引的内核实现——term dictionary（词表，记录有哪些词、词指向哪个文件块）的 FST 压缩、posting list（词下的文档号列表）的 Roaring Bitmap、段（segment，一次 refresh 生成的可独立检索小文件）合并细节。**何时回来学**：做 ES 内存/查询性能深度优化、或开始读 ES 源码时。**面试最低要求**：说出「倒排索引 = 词 → 文档列表，靠 term dictionary 定位词、posting list 存文档号」即可。
@@ -100,13 +103,13 @@ PUT /products
 ```mermaid
 flowchart LR
     A["写入请求"] --> B["内存 buffer + translog<br/>此刻搜不到"]
-    B -->|"每秒一次 refresh"| C["生成一个可搜索的 segment<br/>约 1 秒后可搜"]
-    C -->|"flush 提交"| D["segment 落盘<br/>清空 translog"]
+    B -->|"refresh（由 refresh_interval 或搜索触发）"| C["生成可搜索的 segment<br/>随后可被搜索看到"]
+    C -->|"flush / Lucene commit"| D["提交已落盘的 segment<br/>按代际清理 translog"]
 ```
 
 > **类比一下（账本 vs 货仓）**：生活版——下单的快递信息先记进「记账本」（translog），货还在仓里没出库，别人查不到；仓库每整点把待发单子统一打包出库（refresh），出库后快递单号才查得到；下班前财务把出库记录正式归档入册（flush）。换成 ES——对应写 buffer+translog、按批 refresh 成段、最后 flush 落盘，把「每条写入都随机写盘」换成批量写盘。
 
-> **为什么这么设计**：每秒批量生成 segment，避免「每条写入都随机写盘」（LSM 的批量合并思想）；translog 就是 WAL（Write-Ahead Log）——机器宕机时靠 translog 重放未落盘写入，防数据丢失。这就是「写入即达、约 1 秒才可见」的原因，也解释了为什么 ES 不能当 OLTP 主库。
+> **为什么这么设计**：refresh 批量生成 segment，避免每条写入都立即变成可搜索段；translog 用于故障恢复。Elastic Stack 中 `index.refresh_interval` 默认是 `1s`，但未显式设置时，搜索空闲超过 `index.search.idle.after`（默认 `30s`）的分片会暂停后台 refresh，下一次搜索可能触发 refresh；Serverless 的默认值又不同。因而「约 1 秒可见」只是常见配置下的估计，不能作为业务承诺。[官方索引设置](https://www.elastic.co/docs/reference/elasticsearch/index-settings/index-modules)
 
 ## 进阶
 
@@ -118,10 +121,10 @@ SELECT * FROM products LIMIT 9990, 10;  -- (MySQL 的类比)
 ```
 | 翻页方式 | 适用 | 说明 |
 |-|-|-|
-| `from+size` | 浅分页（<1w） | 深了会爆 |
-| `search_after` | 深分页/滚动加载 | 用上一页最后一条的排序值做游标，恒定成本 |
-| PIT + `search_after` | 深分页 + 一致性快照/全量导出 | **PIT 不是翻页方式**，它只锁住索引快照防滚动中数据变；必须配 `search_after` 使用 |
-> **该怎么做**：深翻页用 `search_after`（游标式）；全量导出用 **PIT + `search_after`**（PIT 保一致快照，避免导出中途索引被改；`scroll` 已不推荐）。
+| `from+size` | 已知页数的浅分页 | `from` 增大时，各分片需保留更多候选；默认结果窗口常为 10,000，实际以索引设置为准 |
+| `search_after` | 连续滚动加载、深遍历 | 用上一页末尾的排序值做游标，避免随页码累积的 `from` 开销；每页仍要执行查询、排序和取回 |
+| PIT + `search_after` | 深遍历 + 一致性视图/全量导出 | PIT 固定查询视图并占用相关资源，不是翻页方式；与 `search_after` 配合使用 |
+> **该怎么做**：连续加载用 `search_after`；全量导出用 **PIT + `search_after`**，并设置可接受的 keep-alive。排序必须稳定且能唯一确定顺序；使用 PIT 时 ES 会提供隐式 `_shard_doc` tiebreaker。`search_after` 不支持任意跳页，也不保证每页成本恒定。[官方分页文档](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/paginate-search-results)
 > **不该怎么做**：`from=100000` 硬翻——每个分片取 10 万条再丢，直接拖垮。
 
 ### 2. 聚合（分析统计）
@@ -136,7 +139,7 @@ GET /orders/_search
 }
 ```
 > **该怎么做**：报表/统计用 ES `aggs` 聚合（快），别拉全量到内存算。
-> **为什么 aggs 聚合快**：字段默认开启 **doc_values（列式存储）**——把每个字段按列连续存放（类比列存数据库），聚合/排序直接顺序扫一列，不用逐行读文档；所以 `text` 字段默认没有 doc_values（文本不可聚合），`keyword`/数值字段才能高效聚合排序。全量拉数据到内存是 O(数据量) 的序列化与传输开销，doc_values 是 O(结果集) 的列式扫描，量级天差地别。
+> **为什么 aggs 通常比拉全量到应用更合适**：`keyword`、数值、日期等字段通常有 **doc_values（列式存储）**，聚合和排序可直接读取字段值，避免把大量原始文档序列化并传回应用；`text` 默认不启用 doc_values，通常应使用其 `keyword` 子字段聚合。性能仍取决于命中文档数、基数、分片数、聚合类型、缓存和磁盘访问，不能把 doc_values 简化成「O(结果集)」或保证一定快。
 > **不该怎么做**：`size` 不加 `0`（默认返回 10 条命中，浪费）。
 
 ### 3. 数据同步（MySQL → ES）
@@ -146,7 +149,7 @@ GET /orders/_search
 | MQ 异步 | 写 MySQL 后发消息，消费端同步 ES | 解耦，推荐 |
 | Canal | 订阅 binlog 自动同步 | 无侵入，但要部署 |
 > **该怎么做**：用 MQ 异步同步（体验好 + 解耦）；严格一致场景可双写 + 对账补偿。
-> **不该怎么做**：ES 当主库——它**没有 ACID 事务**且是**准实时**（默认 `refresh_interval=1s`，写入后约 1 秒才可搜索到；可调 `refresh` API 强制刷新），读你刚写入的可能还没刷出来。
+> **不该怎么做**：把 ES 当核心交易的唯一事实源。它没有通用 OLTP 的多文档 ACID 事务边界，并且搜索可见性取决于 refresh；强制 refresh 会增加写入代价。具体默认 refresh 行为还受搜索空闲和部署形态影响，见上文官方设置说明。
 
 ### 4. 索引模板与别名（企业级惯用法）
 ```json
@@ -171,15 +174,15 @@ POST /_aliases
 ```
 > **代码备注（逐行解释）**：
 > - **索引模板**：`index_patterns` 匹配 `logs-*` 就自动套用 mapping/settings——新索引不用手动配。
-> - `number_of_shards`：主分片数（并行/容量上限），一次定够；`number_of_replicas`：副本数（高可用 + 读）。
+> - `number_of_shards`：主分片数决定初始并行度与容量规划；创建后可通过 split/shrink 或重建索引调整，但代价远高于事前规划。`number_of_replicas`：副本数（高可用 + 读扩展）。
 > - **别名（alias）**：应用层「读写走 `logs-write` 这个别名」，背后索引可无缝切换（升级/重建不中断）。
 > - 组合使用：按天建 `logs-2026-09`，模板统一 mapping，读写走别名，ILM 管理生命周期。
 
 ### 5. 集群与性能（分片/副本/高可用）
 
-> **类比一下（一套书按册分上架）**：生活版——一套 60 本的百科书，图书馆若全塞一个书架，查书只能由一个人在架子上慢慢找；分成 12 个书架就能并行找，但书架总量固定，拆得越多每个书架越薄。换成 ES——**分片**就是并行查询的粒度，也决定容量上限，所以**一次定够**；每本主书再影印一份副本放隔壁库房（**副本分片**），主书被借走副本顶上（高可用），两家库房同时供人查阅（读扩展）。
+> **类比一下（一套书按册分上架）**：生活版——一套 60 本的百科书，图书馆若全塞一个书架，查书只能由一个人在架子上慢慢找；分成 12 个书架就能并行找，但书架总量固定，拆得越多每个书架越薄。换成 ES——**分片**就是并行查询的粒度，也影响容量规划；创建后的调整通常要 split/shrink 或重建索引，应先按数据量、节点数与查询压测规划。每本主书再影印一份副本放隔壁库房（**副本分片**），主书被借走副本顶上（高可用），两家库房同时供人查阅（读扩展）。
 
-- **主分片（primary shard）**：数据的实际存储单元，并行查询的粒度——**一次定够，多了反而慢（跨分片聚合）**。
+- **主分片（primary shard）**：数据的实际存储单元，并行查询的粒度；分片过多会放大跨分片协调与资源开销，分片过少又限制容量和并行度。
 - **副本分片（replica）**：主分片的副本——**高可用（主挂了副本顶上）+ 读扩展**。
 - **集群角色**：`node.roles` 可配置 `master`（管元数据）/ `data`（存数据）/ `ingest`（预处理）/ `ml` 等——**大集群分离部署**（master 与 data 分开）。
 - **纯协调节点（coordinating）= `node.roles: []` 空数组**：它不存数据、只接收并分发请求；「coordinating」不是 `node.roles` 里的合法值。
@@ -199,10 +202,10 @@ flowchart TD
 GET /_cluster/health
 { "status": "green", "number_of_nodes": 3, ... }   // green=主分片+副本都就绪
 ```
-> **该怎么做**：分片数一次定够；副本 ≥1 保高可用；日志类配 ILM 冷热分层。
+> **该怎么做**：在创建前按容量、节点和压测规划主分片数，变更时评估 split/shrink/reindex 成本；副本数按可用性目标和节点数设置，日志类配 ILM 冷热分层。
 > **不该怎么做**：主分片设太多（每个查询跨过多分片，聚合慢）；单节点无副本。
 
-> ⏸️ **短期可以不学**：分片路由与分配策略的内核细节——routing 哈希计算、shard allocation/rebalance 调度、节点故障后的分片恢复流程。**何时回来学**：集群出现分片分配不均/恢复慢、需要做容量与节点规划时。**面试最低要求**：能说出「文档按 _id 哈希路由到主分片、分片数一次定够、副本做高可用与读扩展」即可。
+> ⏸️ **短期可以不学**：分片路由与分配策略的内核细节——routing 哈希计算、shard allocation/rebalance 调度、节点故障后的分片恢复流程。**何时回来学**：集群出现分片分配不均/恢复慢、需要做容量与节点规划时。**面试最低要求**：能说出「文档按路由值落到主分片、主分片数需提前规划且后续调整成本高、副本做高可用与读扩展」即可。
 
 ## 场景与红线（怎么做 / 不该怎么做）
 
@@ -217,11 +220,11 @@ GET /_cluster/health
 ## 红线小结（必背）
 
 1. **ES 是检索/分析引擎**：核心业务数据存 MySQL/PG，ES 只做搜索和聚合。
-2. **`text` 与 `keyword` 分清**：全文用 text，精确/排序/聚合用 keyword。
-3. **深分页用 `search_after`**：别 `from` 硬翻。
-4. **中文用 IK 分词**：默认分词对中文不友好。
+2. **`text` 与 `keyword` 分清**：全文用 text，精确/排序/聚合通常用 keyword 或其他支持 doc_values 的字段。
+3. **连续深遍历用 `search_after`**：它避免 `from` 累积开销，但仍需稳定排序、控制每页开销；导出配 PIT。
+4. **中文分词先评估**：IK 是常见插件，不是默认或唯一方案。
 5. **数据同步用 MQ 异步**：最终一致 + 对账补偿。
-6. **分片数一次定够、副本 ≥1**：主分片多了聚合慢；副本保高可用。
+6. **分片数先规划、按目标设置副本**：主分片过多会增加协调开销；副本提供故障冗余与读扩展，但前提是有可分配的节点。
 7. **日志用索引模板 + 别名 + ILM**：统一 mapping、优雅切换、冷热分层。
 8. **什么时候才上 ES**：数据量大 + 有分词/全文/聚合需求；数据小无分词需求 → MySQL 够用，别过度设计。
 
@@ -232,9 +235,13 @@ GET /_cluster/health
 - [ ] 能说清 `text` vs `keyword` 的适用场景与双字段做法
 - [ ] 能解释深分页为什么慢、为什么 `search_after` 能解决
 - [ ] 能用索引模板统一日志索引 + 别名切换 + ILM 冷热分层
-- [ ] 能说清主分片/副本分片的作用，以及分片数为何一次定够
+- [ ] 能说清主分片/副本分片的作用，以及为什么主分片数应在创建前规划
 - [ ] 能设计 MySQL→ES 的同步方案（MQ 异步 + 对账补偿）
 - [ ] 能说出「什么时候才该上 ES、什么时候 MySQL 够用」
+
+> **场景迁移核对**：商品搜索需要按「相关度降序、上架时间降序」无限滚动，期间商品还在更新。应选什么翻页方案？
+>
+> **核对要点**：使用 PIT + `search_after`；排序字段要形成稳定顺序，PIT 的 keep-alive 要覆盖用户连续浏览时间；它保证的是这次遍历的视图，不替代交易主库，也不支持跳到任意第 N 页。
 
 ## 常见面试题
 
@@ -254,29 +261,29 @@ GET /_cluster/health
 
 **答**：
 
-**标准结论**：写入先进内存 buffer + translog，每秒一次 refresh 生成可搜索 segment，所以「约 1 秒后才可见」（NRT）。
+**标准结论**：写入先进入内存与 translog，refresh 后生成可搜索 segment，所以搜索可见性通常会滞后于写入（NRT）。Elastic Stack 常见默认 refresh 间隔是 `1s`，但空闲分片和 Serverless 的行为不同，不能把 1 秒当承诺。
 
 **底层原理**：
 - translog 是 WAL（Write-Ahead Log）——每次写入先记 translog 防宕机丢数据。
 - refresh 把 buffer 批量转成 segment，避免逐条随机写盘（LSM 批量合并思想，用批量换吞吐）。
 - flush（commit）才把 segment 落盘并清空 translog。
 
-**工程实践**：对可见性要求高的场景可调小 `refresh_interval`（如 100ms）或调 refresh API 强制刷新，但会牺牲写吞吐；数据安全上「副本数 ≥1 + 定期快照」比追求秒级可见更重要——这也是 ES 当不了 OLTP 主库的原因之一。
+**工程实践**：对可见性要求高的场景可以按压测结果调整 `refresh_interval`，或谨慎使用 refresh API；两者都会影响写吞吐。先区分「能否搜索到」与「交易是否已经可靠提交」，核心交易仍应以 OLTP 主库为准。
 
 ### Q3：深分页为什么慢？search_after 为什么能解决？
 
 **答**：
 
-**标准结论**：`from+size` 深翻页时每个分片都要取「from+size」条再全局合并丢弃，且 `max_result_window` 默认 10000 封死；`search_after` 用上一页最后一条的排序值做游标，成本恒定。
+**标准结论**：`from+size` 深翻页时每个分片都要取「from+size」条再全局合并丢弃，默认 `max_result_window` 常为 10,000；`search_after` 用上一页最后一条的排序值做游标，避免随页码增长的跳过成本。
 
 **底层原理**：
 - 分布式下没有「全局第 N 条」，from+size 必须把每个分片的前 N 条全拉出来归并排序，N 越大成本越高。
-- search_after 只向后取一页，天然避免重复跳过已看过的数据。
+- search_after 只向后取一页，避免重复跳过已看过的数据；但每页仍受查询条件、排序字段、分片数与返回字段影响，成本并非恒定。
 
 **工程实践**：
-- 网页翻页（<1w 条）用 from+size 没问题；无限滚动/深翻页用 search_after。
+- 页数有限且窗口较小的分页可用 from+size；无限滚动/深遍历用 search_after。
 - 全量导出用 PIT + search_after 锁一致性快照（scroll 已不推荐）。
-- **常见误区**：search_after 不能任意跳页，且排序值要唯一（加 `_id` 兜底）。
+- **常见误区**：search_after 不能任意跳页；排序必须稳定并能唯一确定顺序，使用 PIT 时采用 ES 提供的隐式 tiebreaker。
 
 ### Q4：text 和 keyword 有什么区别？分词器怎么选？
 
@@ -287,7 +294,7 @@ GET /_cluster/health
 **底层原理**：
 - text 走 analyzer（分词器）拆成 token，match 查询靠词匹配命中。
 - keyword 走 doc_values 列式存储，term 查询整体等值。
-- **分词器**：默认 standard 对中文只能按字/标点切、效果差；中文生产用 IK 分词器（`ik_max_word` 最细、`ik_smart` 智能），索引端与搜索端保持一致或用 max_word + smart 组合。
+- **分词器**：默认分析器未必符合中文业务词边界；IK 是需额外安装的常见插件，其他中文分析器或自定义词典也可能更适合。以真实语料评估索引和搜索分析器组合。
 
 **工程实践**：一个字段既要全文又要排序就做双字段（name + name.keyword）；别把时间/状态/ID 设成 text，否则无法精确匹配与排序聚合。
 
