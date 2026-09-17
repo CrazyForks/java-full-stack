@@ -121,7 +121,6 @@ public class HappensBeforeDemo {
   - **线程 start 规则**：`start()` 调用 hb 被启动线程的任何操作。
   - **线程 join 规则**：被 join 线程的所有操作 hb `join()` 返回。
   - **传递性**：A hb B 且 B hb C，则 A hb C。
-- Go 迁移：channel 的「通信建立顺序」是同类保证——但 JMM 的规则按「操作对」粒度声明（锁 / volatile / final 各有条款），更细。
 
 ### 2. volatile：两件事、不做第三件事
 

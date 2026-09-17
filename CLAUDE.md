@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-面向「Java 企业级全栈学习路线」仓库（前端 / Node / Go 背景转 Java 的学习者）。双定位：**docs/** 是学习资料（8 阶段，入口 [docs/README.md](docs/README.md)），**boot-server/** 是配套实操工程。所有改动服务「学习者」：内容准确、结构稳定、规范可循。
+面向「Java 企业级全栈学习路线」仓库（前端 / Node 背景转 Java 的学习者）。双定位：**docs/** 是学习资料（8 阶段，入口 [docs/README.md](docs/README.md)），**boot-server/** 是配套实操工程。所有改动服务「学习者」：内容准确、结构稳定、规范可循。
 
 ## 规则入口
 
