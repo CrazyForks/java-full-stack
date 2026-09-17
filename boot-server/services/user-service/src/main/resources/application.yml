@@ -39,6 +39,9 @@ spring:
 # ${JWT_SECRET_BASE64:} 表示优先读取环境变量，冒号后为空默认值；未配置时由 @NotBlank 拒绝启动。
 # 密钥不写入仓库；Base64 解码后必须至少有 32 字节才能用于 HS256。启动前：export JWT_SECRET_BASE64="$(openssl rand -base64 32)"
 app:
+  order:
+    # 单实例学习环境使用 0；多实例部署必须为每个实例配置不同的 worker ID。
+    worker-id: ${BOOT_ORDER_WORKER_ID:0}
   jwt:
     secret-base64: ${JWT_SECRET_BASE64:}
     # Spring Boot 用 Duration 绑定该值；改配置即可调整新签发令牌的有效期。

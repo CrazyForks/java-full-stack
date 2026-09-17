@@ -56,4 +56,12 @@ public class StockService {
         return repository.getBySkuId(skuId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "库存尚未配置"));
     }
+
+    /** 供订单用例在其事务内调用；库存上下文独占 t_stock 写入。 */
+    public boolean reserveIfAvailable(Long skuId, int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("预扣数量必须为正数");
+        }
+        return repository.reserveIfAvailable(skuId, quantity) == 1;
+    }
 }

@@ -10,4 +10,7 @@ public interface StockRepository {
     void insert(Stock stock);
 
     int updateTotalIfEnough(Long skuId, long total);
+
+    /** 条件预扣在数据库执行，返回 0 表示未配置或当前可用量不足。 */
+    int reserveIfAvailable(Long skuId, int quantity);
 }

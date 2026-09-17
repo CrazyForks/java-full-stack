@@ -17,7 +17,7 @@ import org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoCon
 @SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
 @EnableConfigurationProperties(ServletPathProperties.class)
 @MapperScan({"com.example.bootserver.mapper", "com.example.bootserver.cart.infrastructure",
-        "com.example.bootserver.stock.infrastructure"})
+        "com.example.bootserver.stock.infrastructure", "com.example.bootserver.order.infrastructure"})
 public class BootServerApplication {
 
     public static void main(String[] args) {

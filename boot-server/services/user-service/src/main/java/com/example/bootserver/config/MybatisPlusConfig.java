@@ -19,7 +19,11 @@ public class MybatisPlusConfig {
     @Bean
     public MybatisPlusInterceptor mybatisPlusInterceptor() {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
+        // 乐观锁：update 时自动把 version 拼进 WHERE 并 +1（当前仅 Sku 在用，见 entity/Sku.java 的 @Version）；
+        // 影响行数为 0 表示并发冲突，由调用方决定重试或报失败。
         interceptor.addInnerInterceptor(new OptimisticLockerInnerInterceptor());
+        // 物理分页：selectPage 先 count 再按声明的 H2 方言生成 LIMIT 子句；
+        // 不注册该插件时分页静默失效、整表查回。消费方：ProductQueryService、UserService。
         interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.H2));
         return interceptor;
     }

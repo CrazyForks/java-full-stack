@@ -179,6 +179,35 @@ CREATE TABLE IF NOT EXISTS t_cart_item (
     CONSTRAINT ck_cart_item_quantity CHECK (quantity BETWEEN 1 AND 999)
 );
 
+-- 订单号独立于数据库主键；订单创建时的价格和金额均为不可回算的快照。
+CREATE TABLE IF NOT EXISTS t_order (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    order_no     VARCHAR(32) NOT NULL,
+    user_id      BIGINT NOT NULL,
+    status       VARCHAR(16) NOT NULL DEFAULT 'CREATED',
+    total_amount DECIMAL(19, 2) NOT NULL,
+    create_time  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_order_no UNIQUE (order_no),
+    CONSTRAINT fk_order_user FOREIGN KEY (user_id) REFERENCES t_user (id),
+    CONSTRAINT ck_order_status CHECK (status IN ('CREATED', 'PAID', 'SHIPPED', 'DONE', 'CANCELLED')),
+    CONSTRAINT ck_order_amount CHECK (total_amount >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_order_user_time ON t_order (user_id, create_time, id);
+
+CREATE TABLE IF NOT EXISTS t_order_item (
+    id       BIGINT AUTO_INCREMENT PRIMARY KEY,
+    order_id BIGINT NOT NULL,
+    sku_id   BIGINT NOT NULL,
+    quantity INT NOT NULL,
+    price    DECIMAL(19, 2) NOT NULL,
+    CONSTRAINT fk_order_item_order FOREIGN KEY (order_id) REFERENCES t_order (id),
+    CONSTRAINT fk_order_item_sku FOREIGN KEY (sku_id) REFERENCES t_sku (id),
+    CONSTRAINT uk_order_item_sku UNIQUE (order_id, sku_id),
+    CONSTRAINT ck_order_item_quantity CHECK (quantity BETWEEN 1 AND 999),
+    CONSTRAINT ck_order_item_price CHECK (price >= 0)
+);
+
 INSERT INTO t_product (name, description, status)
 SELECT 'BootMall 入门手册', '用于验证商品与 SKU 数据模型', 'ON_SALE'
 WHERE NOT EXISTS (SELECT 1 FROM t_product WHERE name = 'BootMall 入门手册');

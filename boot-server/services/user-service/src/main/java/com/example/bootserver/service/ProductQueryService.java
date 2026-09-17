@@ -16,6 +16,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** 商品只读查询规则：仅展示上架且未逻辑删除的商品和 SKU。 */
 @Service
@@ -33,6 +35,24 @@ public class ProductQueryService {
     @Transactional(readOnly = true)
     public boolean hasSkuById(Long skuId) {
         return skuMapper.selectById(skuId) != null;
+    }
+
+    /** 一次批量读取商品和 SKU；仅向订单上下文返回当前可售的报价快照。 */
+    public List<OrderableSkuQuote> listOrderableSkuQuotes(Set<Long> skuIds) {
+        if (skuIds.isEmpty()) {
+            return List.of();
+        }
+        List<Sku> skus = skuMapper.selectList(new LambdaQueryWrapper<Sku>().in(Sku::getId, skuIds));
+        if (skus.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> productIds = skus.stream().map(Sku::getProductId).collect(Collectors.toSet());
+        Set<Long> onSaleProductIds = productMapper.selectList(new LambdaQueryWrapper<Product>()
+                        .in(Product::getId, productIds)
+                        .eq(Product::getStatus, Product.STATUS_ON_SALE))
+                .stream().map(Product::getId).collect(Collectors.toSet());
+        return skus.stream().filter(sku -> onSaleProductIds.contains(sku.getProductId()))
+                .map(sku -> new OrderableSkuQuote(sku.getId(), sku.getPrice())).toList();
     }
 
     /** 按主键稳定排序后分页，避免不同请求的记录顺序漂移。 */

@@ -12,4 +12,10 @@ public interface StockMapper extends BaseMapper<StockEntity> {
             WHERE sku_id = #{skuId} AND locked_count <= #{total}
             """)
     int updateTotalIfEnough(@Param("skuId") Long skuId, @Param("total") long total);
+
+    @Update("""
+            UPDATE t_stock SET locked_count = locked_count + #{quantity}, update_time = CURRENT_TIMESTAMP
+            WHERE sku_id = #{skuId} AND total_count - locked_count >= #{quantity}
+            """)
+    int reserveIfAvailable(@Param("skuId") Long skuId, @Param("quantity") int quantity);
 }

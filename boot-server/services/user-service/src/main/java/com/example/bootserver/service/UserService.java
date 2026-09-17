@@ -201,6 +201,12 @@ public class UserService extends ServiceImpl<UserMapper, User> {
      *
      * 查询结果为 {@code null} 时在业务层转换为用户域异常，Controller 因而只处理 HTTP 输入输出，
      * 不会在各个接口重复判断资源缺失。
+     * <p>
+     * {@code getById} 不是本项目定义的方法，而是继承 {@code ServiceImpl}（MyBatis-Plus
+     * {@code IService} 的实现类）自带的内置 CRUD：内部即 {@code baseMapper.selectById}，
+     * SQL 由 MyBatis-Plus 启动时按实体注解（{@code @TableName}/{@code @TableId}）反射生成
+     * 并注入 Mapper 代理，按主键查询因此无需手写；{@code @TableLogic} 还会让它自动附加
+     * {@code deleted = 0} 过滤，已删除用户在这里同样查不到。
      */
     public User getRequiredById(Long id) {
         User user = getById(id);

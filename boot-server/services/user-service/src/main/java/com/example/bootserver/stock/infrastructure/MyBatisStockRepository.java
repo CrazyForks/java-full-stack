@@ -35,6 +35,11 @@ public class MyBatisStockRepository implements StockRepository {
         return mapper.updateTotalIfEnough(skuId, total);
     }
 
+    @Override
+    public int reserveIfAvailable(Long skuId, int quantity) {
+        return mapper.reserveIfAvailable(skuId, quantity);
+    }
+
     private Stock toStock(StockEntity entity) {
         return new Stock(entity.getSkuId(), entity.getTotalCount(), entity.getLockedCount());
     }

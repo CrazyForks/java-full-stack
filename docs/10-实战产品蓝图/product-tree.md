@@ -1,6 +1,6 @@
 # 后端实现导航树
 
-按真实目录定位代码：既有商品与用户功能按 `controller/service/mapper/entity` 分包；购物车和库存按业务上下文分包，在内部区分 Web、应用、领域和基础设施。卡片状态以[实践计划与进度](实践计划/README.md)为准。
+按真实目录定位代码：既有商品与用户功能按 `controller/service/mapper/entity` 分包；购物车、库存和订单按业务上下文分包，在内部区分 Web、应用、领域和基础设施。卡片状态以[实践计划与进度](实践计划/README.md)为准。
 
 ```text
 boot-server/
@@ -34,7 +34,16 @@ boot-server/
         │   │   │   ├── domain/Stock.java、StockBelowLockedException.java、StockRepository.java
         │   │   │   │   库存不变式与仓储端口
         │   │   │   └── infrastructure/StockEntity.java、StockMapper.java、MyBatisStockRepository.java
-        │   │   │       库存表映射与原子条件更新
+        │   │   │       库存表映射与原子设置、预扣
+        │   │   ├── order/                     订单上下文
+        │   │   │   ├── web/OrderController.java、CreateOrderRequest.java、CreateOrderItemRequest.java、CreateOrderResponse.java
+        │   │   │   │   仅认证的下单入口、请求校验和创建回执
+        │   │   │   ├── application/OrderService.java、OrderNumberGenerator.java、CreateOrderItem.java、CreatedOrder.java
+        │   │   │   │   事务编排、快照计价和雪花式订单号
+        │   │   │   ├── domain/Order.java、OrderLine.java、OrderStatus.java、OrderRepository.java
+        │   │   │   │   订单金额与明细不变式、状态及仓储端口
+        │   │   │   └── infrastructure/OrderEntity.java、OrderItemEntity.java、OrderMapper.java、OrderItemMapper.java、MyBatisOrderRepository.java
+        │   │   │       订单头与明细的持久化映射
         │   │   ├── controller/                HTTP 入口与接口数据对象（DTO）
         │   │   │   ├── AuthController.java     注册、登录并签发 JWT（登录令牌）
         │   │   │   ├── UserController.java     当前用户与后台用户管理
@@ -48,7 +57,7 @@ boot-server/
         │   │   │           请求字段白名单；商品浏览响应不暴露删除标记和版本
         │   │   ├── service/                   业务规则与事务边界
         │   │   │   ├── UserService.java        注册、登录、管理员引导、用户增删改查
-        │   │   │   ├── ProductQueryService.java 上架过滤、稳定分页、商品与 SKU（商品规格）详情；库存侧 SKU 存在性查询
+        │   │   │   ├── ProductQueryService.java、OrderableSkuQuote.java 上架过滤、商品详情与下单报价；库存侧 SKU 存在性查询
         │   │   │   └── ProductManagementService.java
         │   │   │       商品和 SKU 原子创建；上下架；按版本条件更新价格
         │   │   ├── mapper/                    MyBatis-Plus（持久化框架）数据访问
@@ -60,7 +69,7 @@ boot-server/
         │   │   │   └── Product.java、Sku.java   商品状态、逻辑删除、version（改价版本）；
         │   │   │       金额使用 BigDecimal（精确十进制）
         │   │   ├── security/                  JWT 认证与 RBAC（基于角色的权限控制）
-        │   │   │   ├── SecurityConfig.java     商品读取与购物车需登录；商品写入与库存管理需 product:manage
+        │   │   │   ├── SecurityConfig.java     商品读取、购物车与下单需登录；商品写入与库存管理需 product:manage
         │   │   │   ├── JwtAuthenticationFilter.java、JwtTokenService.java、UserAuthorityService.java
         │   │   │   │   验证令牌和当前账号状态，每次请求从数据库加载权限
         │   │   │   ├── RestAuthenticationEntryPoint.java、RestAccessDeniedHandler.java
@@ -77,8 +86,8 @@ boot-server/
         │   │   ├── handler/GlobalExceptionHandler.java  统一错误响应
         │   │   └── exception/UserNotFoundException.java 用户不存在语义
         │   └── resources/
-        │       ├── application.yml           数据源、JWT、MVC 路径等运行配置
-        │       └── db/schema.sql             用户/RBAC、商品/SKU、购物车、库存表与幂等种子；
+        │       ├── application.yml           数据源、JWT、MVC 路径、订单 worker ID 等运行配置
+        │       └── db/schema.sql             用户/RBAC、商品/SKU、购物车、库存、订单表与幂等种子；
         │           数量范围、库存锁定约束、状态、价格、唯一编码和外键约束
         └── test/
             ├── java/com/example/bootserver/
@@ -87,6 +96,10 @@ boot-server/
             │   ├── stock/domain/StockTest.java  可用量与库存不变式
             │   ├── stock/StockArchitectureTest.java  库存分层与依赖方向约束
             │   ├── stock/web/StockIntegrationTests.java  真实 HTTP、权限、条件更新与并发首次设置
+            │   ├── order/domain/OrderTest.java  订单金额和明细不变式
+            │   ├── order/application/OrderNumberGeneratorTest.java  订单号唯一性与 worker 边界
+            │   ├── order/OrderArchitectureTest.java  订单分层与依赖方向约束
+            │   ├── order/web/OrderIntegrationTests.java  下单 HTTP、原子回滚、价格快照与并发预扣
             │   ├── controller/              HTTP 契约与授权
             │   │   ├── AuthControllerWebTests.java、UserControllerWebTests.java
             │   │   ├── ProductQueryIntegrationTests.java
