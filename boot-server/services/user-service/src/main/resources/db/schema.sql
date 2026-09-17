@@ -195,6 +195,16 @@ CREATE TABLE IF NOT EXISTS t_order (
 );
 CREATE INDEX IF NOT EXISTS idx_order_user_time ON t_order (user_id, create_time, id);
 
+-- 旧学习订单没有幂等键，保留为 NULL；新订单始终同时写入键和指纹。
+-- H2 唯一约束允许多个 NULL，因而不会改写或阻断已有学习数据。
+ALTER TABLE t_order ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(64) NULL;
+ALTER TABLE t_order ADD COLUMN IF NOT EXISTS request_fingerprint CHAR(64) NULL;
+ALTER TABLE t_order ADD CONSTRAINT IF NOT EXISTS uk_order_user_idempotency UNIQUE (user_id, idempotency_key);
+ALTER TABLE t_order ADD CONSTRAINT IF NOT EXISTS ck_order_idempotency_pair CHECK (
+    (idempotency_key IS NULL AND request_fingerprint IS NULL)
+    OR (idempotency_key IS NOT NULL AND request_fingerprint IS NOT NULL)
+);
+
 CREATE TABLE IF NOT EXISTS t_order_item (
     id       BIGINT AUTO_INCREMENT PRIMARY KEY,
     order_id BIGINT NOT NULL,

@@ -2,9 +2,9 @@ package com.example.bootserver.order.web;
 
 import com.example.bootserver.common.result.Result;
 import com.example.bootserver.config.OpenApiConfig;
-import com.example.bootserver.order.application.CreateOrderItem;
 import com.example.bootserver.order.application.CreatedOrder;
 import com.example.bootserver.order.application.OrderService;
+import com.example.bootserver.order.domain.OrderSelection;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -28,11 +28,11 @@ public class OrderController {
     }
 
     @PostMapping
-    @Operation(summary = "创建订单", description = "按当前 SKU 售价快照计价，订单、明细与库存预扣同一事务；库存不足返回 409。")
+    @Operation(summary = "创建订单", description = "同一用户携带同一幂等键重试相同内容返回原单；不同内容返回 409。")
     public Result<CreateOrderResponse> createOrder(@AuthenticationPrincipal Long userId,
                                                     @Valid @RequestBody CreateOrderRequest request) {
-        CreatedOrder order = orders.createOrder(userId, request.items().stream()
-                .map(item -> new CreateOrderItem(item.skuId(), item.quantity()))
+        CreatedOrder order = orders.createOrder(userId, request.idempotencyKey(), request.items().stream()
+                .map(item -> new OrderSelection(item.skuId(), item.quantity()))
                 .toList());
         return Result.ok(new CreateOrderResponse(order.id(), order.orderNo(), order.status(), order.totalAmount()));
     }

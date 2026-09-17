@@ -12,7 +12,8 @@ class OrderTest {
 
     @Test
     void amountUsesUnitPriceSnapshotAndQuantity() {
-        Order order = Order.create(3L, "123", List.of(
+        Order order = Order.create(3L, "123", new IdempotencyKey("key-123"),
+                OrderRequestFingerprint.from(3L, List.of(new OrderSelection(11L, 2), new OrderSelection(12L, 3))), List.of(
                 new OrderLine(11L, 2, new BigDecimal("29.90")),
                 new OrderLine(12L, 3, new BigDecimal("9.90"))));
 
@@ -28,7 +29,8 @@ class OrderTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new OrderLine(11L, 1, new BigDecimal("100000000000000000")))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> Order.create(3L, "123", List.of(
+        assertThatThrownBy(() -> Order.create(3L, "123", new IdempotencyKey("key-123"),
+                OrderRequestFingerprint.from(3L, List.of(new OrderSelection(11L, 1))), List.of(
                 new OrderLine(11L, 1, BigDecimal.ONE), new OrderLine(11L, 1, BigDecimal.ONE))))
                 .isInstanceOf(IllegalArgumentException.class);
     }

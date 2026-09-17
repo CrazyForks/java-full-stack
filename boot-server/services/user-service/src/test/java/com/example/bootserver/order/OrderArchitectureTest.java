@@ -5,6 +5,10 @@ import com.example.bootserver.order.domain.Order;
 import com.example.bootserver.order.domain.OrderLine;
 import com.example.bootserver.order.domain.OrderRepository;
 import com.example.bootserver.order.domain.OrderStatus;
+import com.example.bootserver.order.domain.IdempotencyKey;
+import com.example.bootserver.order.domain.OrderSelection;
+import com.example.bootserver.order.domain.OrderRequestFingerprint;
+import com.example.bootserver.order.domain.ExistingOrder;
 import com.example.bootserver.order.infrastructure.OrderEntity;
 import com.example.bootserver.order.infrastructure.OrderItemEntity;
 import com.example.bootserver.order.infrastructure.OrderItemMapper;
@@ -21,7 +25,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class OrderArchitectureTest {
     @Test
     void orderDomainIsFrameworkFree() {
-        for (Class<?> type : List.of(Order.class, OrderLine.class, OrderStatus.class, OrderRepository.class)) {
+        for (Class<?> type : List.of(Order.class, OrderLine.class, OrderStatus.class, OrderRepository.class,
+                IdempotencyKey.class, OrderSelection.class, OrderRequestFingerprint.class, ExistingOrder.class)) {
             assertThat(type.getAnnotations()).isEmpty();
             assertThat(Arrays.stream(type.getDeclaredFields()).map(Field::getType))
                     .allMatch(fieldType -> fieldType.isPrimitive()

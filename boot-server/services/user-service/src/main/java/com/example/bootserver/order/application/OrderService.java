@@ -2,70 +2,59 @@ package com.example.bootserver.order.application;
 
 import com.example.bootserver.common.error.BusinessException;
 import com.example.bootserver.common.error.ErrorCode;
-import com.example.bootserver.order.domain.Order;
-import com.example.bootserver.order.domain.OrderLine;
+import com.example.bootserver.order.domain.ExistingOrder;
+import com.example.bootserver.order.domain.IdempotencyKey;
 import com.example.bootserver.order.domain.OrderRepository;
-import com.example.bootserver.service.OrderableSkuQuote;
-import com.example.bootserver.service.ProductQueryService;
-import com.example.bootserver.stock.application.StockService;
+import com.example.bootserver.order.domain.OrderRequestFingerprint;
+import com.example.bootserver.order.domain.OrderSelection;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
-/** 下单用例的唯一事务边界：快照报价、订单写入和库存预扣全部同成同败。 */
+/** 无事务的幂等协调入口；唯一键竞争后只能在失败写事务结束后回查原单。 */
 @Service
 public class OrderService {
-    private final ProductQueryService products;
-    private final StockService stocks;
     private final OrderRepository orders;
-    private final OrderNumberGenerator numbers;
+    private final OrderWriteStepService writeStep;
 
-    public OrderService(ProductQueryService products, StockService stocks, OrderRepository orders,
-                        OrderNumberGenerator numbers) {
-        this.products = products;
-        this.stocks = stocks;
+    public OrderService(OrderRepository orders, OrderWriteStepService writeStep) {
         this.orders = orders;
-        this.numbers = numbers;
+        this.writeStep = writeStep;
     }
 
-    @Transactional
-    public CreatedOrder createOrder(Long userId, List<CreateOrderItem> items) {
-        if (items == null || items.isEmpty() || items.size() > 50) {
-            throw new BusinessException(ErrorCode.PARAMETER_ERROR, "订单明细数量必须在 1 到 50 之间");
-        }
-        Set<Long> skuIds = new HashSet<>();
-        for (CreateOrderItem item : items) {
-            if (item == null || item.skuId() == null || item.skuId() <= 0
-                    || item.quantity() < 1 || item.quantity() > 999 || !skuIds.add(item.skuId())) {
-                throw new BusinessException(ErrorCode.PARAMETER_ERROR, "订单 SKU 或数量不合法，且不能重复");
-            }
-        }
-        Map<Long, OrderableSkuQuote> quotes = products.listOrderableSkuQuotes(skuIds).stream()
-                .collect(Collectors.toMap(OrderableSkuQuote::skuId, Function.identity()));
-        if (quotes.size() != skuIds.size()) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, "SKU 不存在或未上架");
-        }
+    public CreatedOrder createOrder(Long userId, String rawKey, List<OrderSelection> items) {
+        IdempotencyKey key;
+        OrderRequestFingerprint fingerprint;
         try {
-            List<OrderLine> lines = items.stream()
-                    .map(item -> new OrderLine(item.skuId(), item.quantity(),
-                            quotes.get(item.skuId()).unitPrice()))
-                    .toList();
-            Order order = Order.create(userId, numbers.nextOrderNo(), lines);
-            Long id = orders.insert(order);
-            for (OrderLine line : lines) {
-                if (!stocks.reserveIfAvailable(line.skuId(), line.quantity())) {
-                    throw new BusinessException(ErrorCode.CONFLICT, "库存未配置或可用量不足");
-                }
+            key = new IdempotencyKey(rawKey);
+            if (items == null || items.isEmpty() || items.size() > 50) {
+                throw new IllegalArgumentException("订单明细数量必须在 1 到 50 之间");
             }
-            return new CreatedOrder(id, order.orderNo(), order.status(), order.totalAmount());
+            // 先校验结构和去重，再计算请求语义；重放不依赖实时价格、商品状态或库存。
+            fingerprint = OrderRequestFingerprint.from(userId, items);
         } catch (IllegalArgumentException exception) {
             throw new BusinessException(ErrorCode.PARAMETER_ERROR, exception.getMessage());
         }
+
+        ExistingOrder existing = orders.getByUserIdAndIdempotencyKey(userId, key).orElse(null);
+        if (existing != null) {
+            return replayIfSame(existing, fingerprint);
+        }
+        try {
+            return writeStep.createOrder(userId, key, fingerprint, List.copyOf(items));
+        } catch (DuplicateKeyException exception) {
+            // 唯一键可能是同键竞争，也可能是订单号碰撞；仅找到相同键的原单时才可重放。
+            return orders.getByUserIdAndIdempotencyKey(userId, key)
+                    .map(order -> replayIfSame(order, fingerprint))
+                    .orElseThrow(() -> exception);
+        }
+    }
+
+    private CreatedOrder replayIfSame(ExistingOrder order, OrderRequestFingerprint fingerprint) {
+        if (!order.fingerprint().equals(fingerprint)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "幂等键已用于不同的下单内容");
+        }
+        return new CreatedOrder(order.id(), order.orderNo(), order.status(), order.totalAmount());
     }
 }

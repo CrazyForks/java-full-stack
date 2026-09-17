@@ -122,6 +122,141 @@ class OrderIntegrationTests {
     }
 
     @Test
+    void sameKeyAndEquivalentItemsReplayOriginalDespitePriceAndAvailabilityChanges() throws Exception {
+        long first = newSku("2.50", "ON_SALE");
+        long second = newSku("3.00", "ON_SALE");
+        stock(first, 1);
+        stock(second, 1);
+        String token = login();
+        String key = "replay-" + UUID.randomUUID();
+        int before = countOrders();
+        int beforeItems = countItems();
+        JsonNode created = data(send(orderRequest(token, key, """
+                {"items":[{"skuId":%d,"quantity":1},{"skuId":%d,"quantity":1}]}
+                """.formatted(first, second))));
+        db.update("UPDATE t_sku SET price = 99.00 WHERE id = ?", first);
+        db.update("UPDATE t_product SET status = 'OFF_SALE' WHERE id = (SELECT product_id FROM t_sku WHERE id = ?)",
+                first);
+
+        JsonNode replayed = data(send(orderRequest(token, key, """
+                {"items":[{"quantity":1,"skuId":%d},{"quantity":1,"skuId":%d}]}
+                """.formatted(second, first))));
+        assertThat(replayed).isEqualTo(created);
+        assertThat(countOrders()).isEqualTo(before + 1);
+        assertThat(countItems()).isEqualTo(beforeItems + 2);
+        assertThat(locked(first)).isEqualTo(1);
+        assertThat(locked(second)).isEqualTo(1);
+        String fingerprint = db.queryForObject("SELECT request_fingerprint FROM t_order WHERE id = ?",
+                String.class, created.path("id").asLong());
+        assertThat(fingerprint).matches("[0-9a-f]{64}");
+    }
+
+    @Test
+    void sameKeyDifferentQuantityOrSkuConflictsAndAnotherUserCanReuseKey() throws Exception {
+        long first = newSku("1.00", "ON_SALE");
+        long second = newSku("1.00", "ON_SALE");
+        stock(first, 4);
+        stock(second, 4);
+        String token = login();
+        String key = "conflict-" + UUID.randomUUID();
+        int before = countOrders();
+        data(send(orderRequest(token, key, """
+                {"items":[{"skuId":%d,"quantity":1}]}
+                """.formatted(first))));
+        assertError(send(orderRequest(token, key, """
+                {"items":[{"skuId":%d,"quantity":2}]}
+                """.formatted(first))), ErrorCode.CONFLICT);
+        assertError(send(orderRequest(token, key, """
+                {"items":[{"skuId":%d,"quantity":1}]}
+                """.formatted(second))), ErrorCode.CONFLICT);
+        assertThat(countOrders()).isEqualTo(before + 1);
+        assertThat(locked(first)).isEqualTo(1);
+        assertThat(locked(second)).isZero();
+
+        data(send(orderRequest(login(), key, """
+                {"items":[{"skuId":%d,"quantity":1}]}
+                """.formatted(second))));
+        assertThat(countOrders()).isEqualTo(before + 2);
+    }
+
+    @Test
+    void concurrentSameKeySameRequestReturnsSameOrderOnce() throws Exception {
+        long sku = newSku("1.00", "ON_SALE");
+        stock(sku, 1);
+        String token = login();
+        String key = "parallel-" + UUID.randomUUID();
+        String body = """
+                {"items":[{"skuId":%d,"quantity":1}]}
+                """.formatted(sku);
+        int before = countOrders();
+        CompletableFuture<HttpResponse<String>> a = client.sendAsync(orderRequest(token, key, body),
+                HttpResponse.BodyHandlers.ofString());
+        CompletableFuture<HttpResponse<String>> b = client.sendAsync(orderRequest(token, key, body),
+                HttpResponse.BodyHandlers.ofString());
+        JsonNode first = data(a.join());
+        JsonNode second = data(b.join());
+        assertThat(second).isEqualTo(first);
+        assertThat(countOrders()).isEqualTo(before + 1);
+        assertThat(locked(sku)).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentSameKeyDifferentRequestHasSingleWinner() throws Exception {
+        long sku = newSku("1.00", "ON_SALE");
+        stock(sku, 3);
+        String token = login();
+        String key = "parallel-conflict-" + UUID.randomUUID();
+        int before = countOrders();
+        CompletableFuture<HttpResponse<String>> a = client.sendAsync(orderRequest(token, key, """
+                {"items":[{"skuId":%d,"quantity":1}]}
+                """.formatted(sku)), HttpResponse.BodyHandlers.ofString());
+        CompletableFuture<HttpResponse<String>> b = client.sendAsync(orderRequest(token, key, """
+                {"items":[{"skuId":%d,"quantity":2}]}
+                """.formatted(sku)), HttpResponse.BodyHandlers.ofString());
+        assertThat(java.util.List.of(a.join().statusCode(), b.join().statusCode()))
+                .containsExactlyInAnyOrder(200, 409);
+        assertThat(countOrders()).isEqualTo(before + 1);
+        long persistedQuantity = db.queryForObject("""
+                SELECT quantity FROM t_order_item WHERE order_id =
+                (SELECT id FROM t_order WHERE idempotency_key = ?)
+                """, Long.class, key);
+        assertThat(locked(sku)).isEqualTo(persistedQuantity);
+    }
+
+    @Test
+    void missingOrMalformedIdempotencyKeyIsRejected() throws Exception {
+        long sku = newSku("1.00", "ON_SALE");
+        stock(sku, 5);
+        String token = login();
+        String items = "\"items\":[{\"skuId\":%d,\"quantity\":1}]".formatted(sku);
+        for (String keyField : java.util.List.of("", "\"idempotencyKey\":null,",
+                "\"idempotencyKey\":\"\",", "\"idempotencyKey\":\" \",",
+                "\"idempotencyKey\":\"" + "x".repeat(65) + "\",",
+                "\"idempotencyKey\":\"中文\",", "\"idempotencyKey\":\"a\\nb\",")) {
+            assertError(send(rawOrderRequest(token, "{" + keyField + items)), ErrorCode.PARAMETER_ERROR);
+        }
+        assertThat(locked(sku)).isZero();
+    }
+
+    @Test
+    void failedStockReservationRollsBackKeyAndCanRetryAfterRestock() throws Exception {
+        long sku = newSku("1.00", "ON_SALE");
+        stock(sku, 0);
+        String token = login();
+        String key = "restock-" + UUID.randomUUID();
+        String body = """
+                {"items":[{"skuId":%d,"quantity":1}]}
+                """.formatted(sku);
+        int before = countOrders();
+        assertError(send(orderRequest(token, key, body)), ErrorCode.CONFLICT);
+        assertThat(countOrders()).isEqualTo(before);
+        db.update("UPDATE t_stock SET total_count = 1 WHERE sku_id = ?", sku);
+        data(send(orderRequest(token, key, body)));
+        assertThat(countOrders()).isEqualTo(before + 1);
+        assertThat(locked(sku)).isEqualTo(1);
+    }
+
+    @Test
     void openApiContainsOrderCreation() throws Exception {
         JsonNode spec = json.readTree(send(request("/v3/api-docs", null).GET().build()).body());
         assertThat(spec.path("paths").path("/orders").has("post")).isTrue();
@@ -167,6 +302,14 @@ class OrderIntegrationTests {
     }
 
     private HttpRequest orderRequest(String token, String body) {
+        return orderRequest(token, UUID.randomUUID().toString(), body);
+    }
+
+    private HttpRequest orderRequest(String token, String key, String body) {
+        return rawOrderRequest(token, "{\"idempotencyKey\":\"" + key + "\"," + body.substring(1));
+    }
+
+    private HttpRequest rawOrderRequest(String token, String body) {
         return request("/orders", token).POST(HttpRequest.BodyPublishers.ofString(body)).build();
     }
 

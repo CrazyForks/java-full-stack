@@ -16,6 +16,8 @@ public class OrderEntity {
     private Long id;
     private String orderNo;
     private Long userId;
+    private String idempotencyKey;
+    private String requestFingerprint;
     private String status;
     private BigDecimal totalAmount;
     private LocalDateTime createTime;
