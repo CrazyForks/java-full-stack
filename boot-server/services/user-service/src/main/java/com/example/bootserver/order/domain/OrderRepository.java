@@ -7,4 +7,8 @@ public interface OrderRepository {
     Long insert(Order order);
 
     Optional<ExistingOrder> getByUserIdAndIdempotencyKey(Long userId, IdempotencyKey key);
+
+    int updateStatusIfCurrent(Long id, Long userId, OrderStatus current, OrderStatus target);
+
+    Optional<OrderStatus> getStatusByIdAndUserId(Long id, Long userId);
 }

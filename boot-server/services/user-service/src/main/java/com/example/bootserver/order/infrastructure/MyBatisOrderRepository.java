@@ -1,6 +1,7 @@
 package com.example.bootserver.order.infrastructure;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.bootserver.order.domain.ExistingOrder;
 import com.example.bootserver.order.domain.IdempotencyKey;
 import com.example.bootserver.order.domain.Order;
@@ -52,5 +53,24 @@ public class MyBatisOrderRepository implements OrderRepository {
         return Optional.ofNullable(entity).map(found -> new ExistingOrder(found.getId(), found.getOrderNo(),
                 OrderStatus.valueOf(found.getStatus()), found.getTotalAmount(),
                 new OrderRequestFingerprint(found.getRequestFingerprint())));
+    }
+
+    @Override
+    public int updateStatusIfCurrent(Long id, Long userId, OrderStatus current, OrderStatus target) {
+        return orderMapper.update(null, new LambdaUpdateWrapper<OrderEntity>()
+                .eq(OrderEntity::getId, id)
+                .eq(OrderEntity::getUserId, userId)
+                .eq(OrderEntity::getStatus, current.name())
+                .set(OrderEntity::getStatus, target.name())
+                .setSql("update_time = CURRENT_TIMESTAMP"));
+    }
+
+    @Override
+    public Optional<OrderStatus> getStatusByIdAndUserId(Long id, Long userId) {
+        OrderEntity entity = orderMapper.selectOne(new LambdaQueryWrapper<OrderEntity>()
+                .select(OrderEntity::getStatus)
+                .eq(OrderEntity::getId, id)
+                .eq(OrderEntity::getUserId, userId));
+        return Optional.ofNullable(entity).map(OrderEntity::getStatus).map(OrderStatus::valueOf);
     }
 }

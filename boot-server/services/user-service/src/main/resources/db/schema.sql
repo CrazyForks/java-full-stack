@@ -218,6 +218,21 @@ CREATE TABLE IF NOT EXISTS t_order_item (
     CONSTRAINT ck_order_item_price CHECK (price >= 0)
 );
 
+-- 同一订单至多一张成功支付单；支付流水号只用于外部追踪。
+CREATE TABLE IF NOT EXISTS t_payment (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    order_id    BIGINT NOT NULL,
+    pay_no      VARCHAR(40) NOT NULL,
+    amount      DECIMAL(19, 2) NOT NULL,
+    status      VARCHAR(16) NOT NULL DEFAULT 'SUCCESS',
+    create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_payment_order UNIQUE (order_id),
+    CONSTRAINT uk_payment_no UNIQUE (pay_no),
+    CONSTRAINT fk_payment_order FOREIGN KEY (order_id) REFERENCES t_order (id),
+    CONSTRAINT ck_payment_amount CHECK (amount >= 0),
+    CONSTRAINT ck_payment_status CHECK (status IN ('SUCCESS'))
+);
+
 INSERT INTO t_product (name, description, status)
 SELECT 'BootMall 入门手册', '用于验证商品与 SKU 数据模型', 'ON_SALE'
 WHERE NOT EXISTS (SELECT 1 FROM t_product WHERE name = 'BootMall 入门手册');

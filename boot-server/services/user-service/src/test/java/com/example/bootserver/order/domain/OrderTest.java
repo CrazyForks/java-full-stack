@@ -34,4 +34,11 @@ class OrderTest {
                 new OrderLine(11L, 1, BigDecimal.ONE), new OrderLine(11L, 1, BigDecimal.ONE))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void onlyCreatedOrderCanTransitionToPaid() {
+        assertThat(OrderStatus.CREATED.pay()).isEqualTo(OrderStatus.PAID);
+        assertThatThrownBy(OrderStatus.PAID::pay).isInstanceOf(IllegalOrderStateException.class);
+        assertThatThrownBy(OrderStatus.CANCELLED::pay).isInstanceOf(IllegalOrderStateException.class);
+    }
 }

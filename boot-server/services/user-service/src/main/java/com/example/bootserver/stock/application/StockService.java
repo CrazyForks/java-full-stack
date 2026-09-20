@@ -64,4 +64,18 @@ public class StockService {
         }
         return repository.reserveIfAvailable(skuId, quantity) == 1;
     }
+
+    /** 供支付事务调用；领域快照和数据库条件更新共同防止锁定量被重复实扣。 */
+    public void settleReserved(Long skuId, int quantity) {
+        Stock stock = repository.getBySkuId(skuId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT, "库存记录不存在"));
+        try {
+            stock.settle(quantity);
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(ErrorCode.CONFLICT, exception.getMessage());
+        }
+        if (repository.settleReserved(skuId, quantity) == 0) {
+            throw new BusinessException(ErrorCode.CONFLICT, "已锁定库存不足");
+        }
+    }
 }

@@ -22,6 +22,14 @@ public record Stock(Long skuId, long total, long locked) {
         return new Stock(skuId, newTotal, locked);
     }
 
+    /** 把已锁定库存转为实扣，领域快照先守护数量，数据库条件更新处理并发。 */
+    public Stock settle(int quantity) {
+        if (quantity <= 0 || locked < quantity) {
+            throw new IllegalArgumentException("已锁定库存不足");
+        }
+        return new Stock(skuId, total - quantity, locked - quantity);
+    }
+
     public long available() {
         return total - locked;
     }

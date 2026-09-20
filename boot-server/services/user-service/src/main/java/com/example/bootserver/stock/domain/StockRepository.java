@@ -13,4 +13,7 @@ public interface StockRepository {
 
     /** 条件预扣在数据库执行，返回 0 表示未配置或当前可用量不足。 */
     int reserveIfAvailable(Long skuId, int quantity);
+
+    /** 已锁定量足够时，把预扣同步转为总量与锁定量的实扣。 */
+    int settleReserved(Long skuId, int quantity);
 }
