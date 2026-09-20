@@ -27,7 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 /** 商品接口；读取仅需有效 JWT，写入要求商品管理权限。 */
 @RestController
 @RequestMapping("/products")
-@Tag(name = "商品", description = "商品浏览与管理员创建、上下架")
+@Tag(name = "商品", description = "商品浏览、SKU 与库存管理")
 @SecurityRequirement(name = OpenApiConfig.BEARER_AUTHENTICATION)
 public class ProductController {
 

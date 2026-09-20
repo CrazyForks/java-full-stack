@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 /** 管理员库存接口；仅设置总量，预扣与扣减留待下单用例。 */
 @RestController
 @RequestMapping("/stocks")
-@Tag(name = "库存管理", description = "管理员设置和查询 SKU 库存")
+@Tag(name = "商品", description = "商品浏览、SKU 与库存管理")
 @SecurityRequirement(name = OpenApiConfig.BEARER_AUTHENTICATION)
 public class StockController {
 

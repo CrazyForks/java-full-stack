@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * M1 接口文档的全局元信息与 JWT 安全方案。
+ * BootMall 接口文档的全局元信息与 JWT 安全方案。
  *
  * SpringDoc 在启动时读取本配置、Controller 映射和 DTO 约束，生成由 MVC 外部前缀配置决定的 OpenAPI JSON；Swagger UI
  * 只是该 JSON 的可视化页面，实际鉴权仍由 Spring Security 的过滤器链执行。
@@ -31,7 +31,7 @@ public class OpenApiConfig {
     public OpenAPI bootMallOpenApi() {
         return new OpenAPI().info(new Info()
                 .title("BootMall 用户服务 API")
-                .version("M1")
-                .description("M1 安全后台骨架：注册、登录、JWT 认证与 RBAC 用户管理接口。"));
+                .version("M2")
+                .description("M2 交易核心：商品、购物车、库存、订单、支付模拟与履约状态机。"));
     }
 }

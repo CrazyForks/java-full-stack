@@ -94,7 +94,7 @@ boot-server/
         │   │   │   ├── MybatisPlusConfig.java  乐观锁与 H2（嵌入式数据库）分页插件
         │   │   │   ├── PasswordConfig.java     BCrypt（密码哈希算法）编码器
         │   │   │   ├── ServletPathProperties.java  MVC（Web 接口）外部路径配置
-        │   │   │   ├── OpenApiConfig.java      OpenAPI（接口文档）与 Bearer 方案
+        │   │   │   ├── OpenApiConfig.java      M2 OpenAPI 元信息与 Bearer 方案
         │   │   │   └── LocalAdminProperties.java、LocalAdminInitializer.java
         │   │   │       环境变量控制本地管理员幂等引导
         │   │   ├── handler/GlobalExceptionHandler.java  统一错误响应
@@ -120,6 +120,7 @@ boot-server/
             │   ├── payment/domain/PaymentTest.java  支付单金额、状态与标识不变式
             │   ├── payment/PaymentArchitectureTest.java  支付分层与跨上下文协作边界
             │   ├── payment/web/PaymentIntegrationTests.java  真实 HTTP、并发支付、状态门、库存实扣与事务回滚
+            │   ├── M2RegressionIntegrationTests.java  OpenAPI 四组资源与原子性、幂等、非法迁移 DoD 门禁
             │   ├── controller/              HTTP 契约与授权
             │   │   ├── AuthControllerWebTests.java、UserControllerWebTests.java
             │   │   ├── ProductQueryIntegrationTests.java

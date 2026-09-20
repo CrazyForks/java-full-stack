@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 /** 管理员 SKU 改价接口；版本由客户端提交，数据库条件更新防止覆盖。 */
 @RestController
 @RequestMapping("/skus")
-@Tag(name = "SKU 管理", description = "管理员按版本调整 SKU 价格")
+@Tag(name = "商品", description = "商品浏览、SKU 与库存管理")
 @SecurityRequirement(name = OpenApiConfig.BEARER_AUTHENTICATION)
 public class SkuController {
 

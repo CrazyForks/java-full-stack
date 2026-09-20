@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 /** 订单接口；主体身份只取已验证的 JWT。 */
 @RestController
 @RequestMapping("/orders")
-@Tag(name = "订单", description = "当前用户下单")
+@Tag(name = "订单", description = "本人订单生命周期与后台履约管理")
 @SecurityRequirement(name = OpenApiConfig.BEARER_AUTHENTICATION)
 public class OrderController {
     private final OrderService orders;

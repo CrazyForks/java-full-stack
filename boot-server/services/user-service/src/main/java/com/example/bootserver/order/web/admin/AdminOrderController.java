@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 /** 具备 order:manage 权限的后台订单查询与发货入口。 */
 @RestController
 @RequestMapping("/admin/orders")
-@Tag(name = "订单管理", description = "后台订单查询与发货")
+@Tag(name = "订单", description = "本人订单生命周期与后台履约管理")
 @SecurityRequirement(name = OpenApiConfig.BEARER_AUTHENTICATION)
 public class AdminOrderController {
     private final OrderQueryService queries;
