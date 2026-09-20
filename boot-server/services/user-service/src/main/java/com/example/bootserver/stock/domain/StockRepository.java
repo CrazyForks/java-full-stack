@@ -16,4 +16,7 @@ public interface StockRepository {
 
     /** 已锁定量足够时，把预扣同步转为总量与锁定量的实扣。 */
     int settleReserved(Long skuId, int quantity);
+
+    /** 已锁定量足够时释放预扣，总量不变。 */
+    int releaseReserved(Long skuId, int quantity);
 }

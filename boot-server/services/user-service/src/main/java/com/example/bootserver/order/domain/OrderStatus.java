@@ -11,4 +11,12 @@ public enum OrderStatus {
         }
         return PAID;
     }
+
+    /** 只有待支付订单可由用户主动取消。 */
+    public OrderStatus cancel() {
+        if (this != CREATED) {
+            throw new IllegalOrderStateException("当前订单状态不允许取消");
+        }
+        return CANCELLED;
+    }
 }

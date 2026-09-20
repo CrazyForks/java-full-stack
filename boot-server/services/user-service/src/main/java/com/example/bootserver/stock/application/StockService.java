@@ -78,4 +78,18 @@ public class StockService {
             throw new BusinessException(ErrorCode.CONFLICT, "已锁定库存不足");
         }
     }
+
+    /** 供取消事务调用；只释放预扣，不恢复或改变总库存。 */
+    public void releaseReserved(Long skuId, int quantity) {
+        Stock stock = repository.getBySkuId(skuId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT, "库存记录不存在"));
+        try {
+            stock.release(quantity);
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(ErrorCode.CONFLICT, exception.getMessage());
+        }
+        if (repository.releaseReserved(skuId, quantity) == 0) {
+            throw new BusinessException(ErrorCode.CONFLICT, "已锁定库存不足");
+        }
+    }
 }

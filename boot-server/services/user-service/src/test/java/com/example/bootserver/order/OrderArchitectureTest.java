@@ -1,6 +1,7 @@
 package com.example.bootserver.order;
 
 import com.example.bootserver.order.application.OrderService;
+import com.example.bootserver.order.application.OrderCancellationService;
 import com.example.bootserver.order.application.OrderQueryRepository;
 import com.example.bootserver.order.application.OrderQueryService;
 import com.example.bootserver.order.application.OrderPaymentService;
@@ -51,6 +52,10 @@ class OrderArchitectureTest {
                 .doesNotContain(OrderMapper.class, OrderItemMapper.class,
                         OrderEntity.class, OrderItemEntity.class);
         assertThat(Arrays.stream(OrderPaymentService.class.getDeclaredFields()).map(Field::getType))
+                .contains(OrderRepository.class, OrderQueryRepository.class)
+                .doesNotContain(OrderMapper.class, OrderItemMapper.class,
+                        OrderEntity.class, OrderItemEntity.class);
+        assertThat(Arrays.stream(OrderCancellationService.class.getDeclaredFields()).map(Field::getType))
                 .contains(OrderRepository.class, OrderQueryRepository.class)
                 .doesNotContain(OrderMapper.class, OrderItemMapper.class,
                         OrderEntity.class, OrderItemEntity.class);

@@ -41,4 +41,11 @@ class OrderTest {
         assertThatThrownBy(OrderStatus.PAID::pay).isInstanceOf(IllegalOrderStateException.class);
         assertThatThrownBy(OrderStatus.CANCELLED::pay).isInstanceOf(IllegalOrderStateException.class);
     }
+
+    @Test
+    void onlyCreatedOrderCanTransitionToCancelled() {
+        assertThat(OrderStatus.CREATED.cancel()).isEqualTo(OrderStatus.CANCELLED);
+        assertThatThrownBy(OrderStatus.PAID::cancel).isInstanceOf(IllegalOrderStateException.class);
+        assertThatThrownBy(OrderStatus.CANCELLED::cancel).isInstanceOf(IllegalOrderStateException.class);
+    }
 }

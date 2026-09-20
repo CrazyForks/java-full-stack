@@ -30,16 +30,16 @@ boot-server/
         │   │   │   ├── web/StockController.java、UpdateStockRequest.java、StockResponse.java、StrictStockTotalDeserializer.java
         │   │   │   │   管理员设置总量、严格整数绑定与查询 total/locked/available
         │   │   │   ├── application/StockService.java、StockWriteStepService.java
-        │   │   │   │   SKU 存在性协作、条件更新、首次插入竞争重试
+        │   │   │   │   SKU 存在性协作、条件更新、首次插入竞争重试、预扣结算与释放
         │   │   │   ├── domain/Stock.java、StockBelowLockedException.java、StockRepository.java
         │   │   │   │   库存不变式与仓储端口
         │   │   │   └── infrastructure/StockEntity.java、StockMapper.java、MyBatisStockRepository.java
-        │   │   │       库存表映射与原子设置、预扣、支付实扣
+        │   │   │       库存表映射与原子设置、预扣、支付实扣、取消释放
         │   │   ├── order/                     订单上下文
         │   │   │   ├── web/OrderController.java、CreateOrderRequest.java、CreateOrderResponse.java、OrderPageRequest.java 等
         │   │   │   │   仅认证的下单、本人订单分页与详情入口；价格快照响应
-        │   │   │   ├── application/OrderService.java、OrderWriteStepService.java、OrderNumberGenerator.java、OrderQueryService.java、OrderQueryRepository.java、OrderPaymentService.java 等
-        │   │   │   │   幂等协调、独立写事务、快照计价、本人查询及支付状态认领契约
+        │   │   │   ├── application/OrderService.java、OrderWriteStepService.java、OrderNumberGenerator.java、OrderQueryService.java、OrderQueryRepository.java、OrderPaymentService.java、OrderCancellationService.java 等
+        │   │   │   │   幂等协调、独立写事务、快照计价、本人查询、支付状态认领及取消库存补偿
         │   │   │   ├── domain/
         │   │   │   │   ├── Order.java、OrderLine.java、OrderStatus.java、OrderRepository.java
         │   │   │   │   │   订单金额与明细不变式、状态迁移及条件更新仓储端口
@@ -113,6 +113,7 @@ boot-server/
             │   ├── order/application/OrderNumberGeneratorTest.java  订单号唯一性与 worker 边界
             │   ├── order/OrderArchitectureTest.java  订单分层与依赖方向约束
             │   ├── order/web/OrderIntegrationTests.java  下单与本人查询 HTTP、原子回滚、并发预扣、幂等重放与越权隔离
+            │   ├── order/web/OrderCancellationIntegrationTests.java  本人取消、非法状态、库存释放与事务回滚
             │   ├── payment/domain/PaymentTest.java  支付单金额、状态与标识不变式
             │   ├── payment/PaymentArchitectureTest.java  支付分层与跨上下文协作边界
             │   ├── payment/web/PaymentIntegrationTests.java  真实 HTTP、并发支付、状态门、库存实扣与事务回滚

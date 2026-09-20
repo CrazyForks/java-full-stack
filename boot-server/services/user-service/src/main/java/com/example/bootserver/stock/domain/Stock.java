@@ -30,6 +30,14 @@ public record Stock(Long skuId, long total, long locked) {
         return new Stock(skuId, total - quantity, locked - quantity);
     }
 
+    /** 取消订单时释放预扣，总库存保持不变。 */
+    public Stock release(int quantity) {
+        if (quantity <= 0 || locked < quantity) {
+            throw new IllegalArgumentException("已锁定库存不足");
+        }
+        return new Stock(skuId, total, locked - quantity);
+    }
+
     public long available() {
         return total - locked;
     }

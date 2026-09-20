@@ -34,4 +34,14 @@ class StockTest {
         assertThatThrownBy(() -> new Stock(1L, 10, 2).settle(3))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void releaseOnlyReducesLockedCount() {
+        Stock released = new Stock(1L, 10, 4).release(3);
+
+        assertThat(released.total()).isEqualTo(10);
+        assertThat(released.locked()).isEqualTo(1);
+        assertThatThrownBy(() -> new Stock(1L, 10, 2).release(3))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }
