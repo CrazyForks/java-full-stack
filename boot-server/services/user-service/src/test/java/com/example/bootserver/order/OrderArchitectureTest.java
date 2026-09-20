@@ -1,6 +1,8 @@
 package com.example.bootserver.order;
 
 import com.example.bootserver.order.application.OrderService;
+import com.example.bootserver.order.application.OrderQueryRepository;
+import com.example.bootserver.order.application.OrderQueryService;
 import com.example.bootserver.order.domain.Order;
 import com.example.bootserver.order.domain.OrderLine;
 import com.example.bootserver.order.domain.OrderRepository;
@@ -39,6 +41,10 @@ class OrderArchitectureTest {
     void orderApplicationDoesNotDependOnPersistenceEntitiesOrMappers() {
         assertThat(Arrays.stream(OrderService.class.getDeclaredFields()).map(Field::getType))
                 .contains(OrderRepository.class)
+                .doesNotContain(OrderMapper.class, OrderItemMapper.class,
+                        OrderEntity.class, OrderItemEntity.class);
+        assertThat(Arrays.stream(OrderQueryService.class.getDeclaredFields()).map(Field::getType))
+                .containsExactly(OrderQueryRepository.class)
                 .doesNotContain(OrderMapper.class, OrderItemMapper.class,
                         OrderEntity.class, OrderItemEntity.class);
     }

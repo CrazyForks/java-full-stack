@@ -257,9 +257,55 @@ class OrderIntegrationTests {
     }
 
     @Test
-    void openApiContainsOrderCreation() throws Exception {
+    void currentUserCanListOrdersAndReadDetailWithSnapshotPrice() throws Exception {
+        long sku = newSku("4.25", "ON_SALE");
+        stock(sku, 3);
+        String token = login();
+        JsonNode first = data(send(orderRequest(token, """
+                {"items":[{"skuId":%d,"quantity":1}]}
+                """.formatted(sku))));
+        JsonNode second = data(send(orderRequest(token, """
+                {"items":[{"skuId":%d,"quantity":2}]}
+                """.formatted(sku))));
+        db.update("UPDATE t_sku SET price = 88.00 WHERE id = ?", sku);
+
+        JsonNode page = data(send(request("/orders?page=1&size=10", token).GET().build()));
+        assertThat(page.path("total").asLong()).isEqualTo(2);
+        assertThat(page.path("items").size()).isEqualTo(2);
+        assertThat(page.path("items").get(0).path("id").asLong()).isEqualTo(second.path("id").asLong());
+        assertThat(page.path("items").get(1).path("id").asLong()).isEqualTo(first.path("id").asLong());
+
+        JsonNode detail = data(send(request("/orders/" + second.path("id").asLong(), token).GET().build()));
+        assertThat(detail.path("status").asString()).isEqualTo("CREATED");
+        assertThat(detail.path("totalAmount").decimalValue()).isEqualByComparingTo("8.50");
+        assertThat(detail.path("items").size()).isEqualTo(1);
+        assertThat(detail.path("items").get(0).path("skuId").asLong()).isEqualTo(sku);
+        assertThat(detail.path("items").get(0).path("quantity").asInt()).isEqualTo(2);
+        assertThat(detail.path("items").get(0).path("price").decimalValue()).isEqualByComparingTo("4.25");
+    }
+
+    @Test
+    void orderQueriesRequireAuthenticationAndHideOtherUsersOrders() throws Exception {
+        long sku = newSku("1.50", "ON_SALE");
+        stock(sku, 2);
+        String ownerToken = login();
+        long orderId = data(send(orderRequest(ownerToken, """
+                {"items":[{"skuId":%d,"quantity":1}]}
+                """.formatted(sku)))).path("id").asLong();
+
+        assertError(send(request("/orders", null).GET().build()), ErrorCode.UNAUTHORIZED);
+        assertError(send(request("/orders/" + orderId, login()).GET().build()), ErrorCode.NOT_FOUND);
+        assertError(send(request("/orders/999999999", ownerToken).GET().build()), ErrorCode.NOT_FOUND);
+        assertError(send(request("/orders?page=0&size=10", ownerToken).GET().build()), ErrorCode.PARAMETER_ERROR);
+        assertError(send(request("/orders?page=1&size=101", ownerToken).GET().build()), ErrorCode.PARAMETER_ERROR);
+    }
+
+    @Test
+    void openApiContainsOrderCreationAndQueries() throws Exception {
         JsonNode spec = json.readTree(send(request("/v3/api-docs", null).GET().build()).body());
         assertThat(spec.path("paths").path("/orders").has("post")).isTrue();
+        assertThat(spec.path("paths").path("/orders").has("get")).isTrue();
+        assertThat(spec.path("paths").path("/orders/{id}").has("get")).isTrue();
     }
 
     private long newSku(String price, String status) {
