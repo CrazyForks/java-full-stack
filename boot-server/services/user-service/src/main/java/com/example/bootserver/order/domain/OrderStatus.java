@@ -19,4 +19,20 @@ public enum OrderStatus {
         }
         return CANCELLED;
     }
+
+    /** 管理员只能发货已支付订单。 */
+    public OrderStatus ship() {
+        if (this != PAID) {
+            throw new IllegalOrderStateException("当前订单状态不允许发货");
+        }
+        return SHIPPED;
+    }
+
+    /** 用户只能确认已发货订单。 */
+    public OrderStatus confirm() {
+        if (this != SHIPPED) {
+            throw new IllegalOrderStateException("当前订单状态不允许确认收货");
+        }
+        return DONE;
+    }
 }

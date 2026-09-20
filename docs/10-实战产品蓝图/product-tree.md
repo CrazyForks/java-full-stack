@@ -37,16 +37,18 @@ boot-server/
         │   │   │       库存表映射与原子设置、预扣、支付实扣、取消释放
         │   │   ├── order/                     订单上下文
         │   │   │   ├── web/OrderController.java、CreateOrderRequest.java、CreateOrderResponse.java、OrderPageRequest.java 等
-        │   │   │   │   仅认证的下单、本人订单分页与详情入口；价格快照响应
-        │   │   │   ├── application/OrderService.java、OrderWriteStepService.java、OrderNumberGenerator.java、OrderQueryService.java、OrderQueryRepository.java、OrderPaymentService.java、OrderCancellationService.java 等
-        │   │   │   │   幂等协调、独立写事务、快照计价、本人查询、支付状态认领及取消库存补偿
+        │   │   │   │   仅认证的下单、本人查询、取消与确认收货；价格快照响应
+        │   │   │   ├── web/admin/AdminOrderController.java、AdminOrderPageResponse.java、AdminOrderSummaryResponse.java
+        │   │   │   │   order:manage 保护的全量订单分页与发货入口
+        │   │   │   ├── application/OrderService.java、OrderWriteStepService.java、OrderNumberGenerator.java、OrderQueryService.java、OrderQueryRepository.java、OrderPaymentService.java、OrderCancellationService.java、OrderFulfillmentService.java 等
+        │   │   │   │   幂等协调、快照计价、本人/后台查询、支付认领、取消补偿与履约状态迁移
         │   │   │   ├── domain/
         │   │   │   │   ├── Order.java、OrderLine.java、OrderStatus.java、OrderRepository.java
         │   │   │   │   │   订单金额与明细不变式、状态迁移及条件更新仓储端口
         │   │   │   │   └── IdempotencyKey.java、OrderSelection.java、OrderRequestFingerprint.java、ExistingOrder.java
         │   │   │   │       用户作用域幂等键、请求语义、指纹与原单投影
         │   │   │   └── infrastructure/OrderEntity.java、OrderItemEntity.java、OrderMapper.java、OrderItemMapper.java、MyBatisOrderRepository.java、MyBatisOrderQueryRepository.java
-        │   │   │       订单头、明细和用户加幂等键的持久化；稳定倒序分页与本人详情投影
+        │   │   │       订单头、明细和用户加幂等键的持久化；本人/后台稳定倒序分页与详情投影
         │   │   ├── payment/                   支付上下文
         │   │   │   ├── web/PaymentController.java、PaymentResponse.java
         │   │   │   │   仅订单所有者可调用的同步模拟支付入口
@@ -81,13 +83,13 @@ boot-server/
         │   │   │   └── Product.java、Sku.java   商品状态、逻辑删除、version（改价版本）；
         │   │   │       金额使用 BigDecimal（精确十进制）
         │   │   ├── security/                  JWT 认证与 RBAC（基于角色的权限控制）
-        │   │   │   ├── SecurityConfig.java     商品读取、购物车与下单需登录；商品写入与库存管理需 product:manage
+        │   │   │   ├── SecurityConfig.java     C 端交易需登录；商品/库存和后台订单分别按权限码保护
         │   │   │   ├── JwtAuthenticationFilter.java、JwtTokenService.java、UserAuthorityService.java
         │   │   │   │   验证令牌和当前账号状态，每次请求从数据库加载权限
         │   │   │   ├── RestAuthenticationEntryPoint.java、RestAccessDeniedHandler.java
         │   │   │   │   分别返回统一的 401、403 响应
         │   │   │   └── RoleCodes.java、PermissionCodes.java、BearerAuthentication.java
-        │   │   │       稳定角色码、权限码与 Bearer（认证头方案）前缀
+        │   │   │       稳定角色码、user/product/order 管理权限码与 Bearer（认证头方案）前缀
         │   │   ├── config/                    框架与可部署配置
         │   │   │   ├── MybatisPlusConfig.java  乐观锁与 H2（嵌入式数据库）分页插件
         │   │   │   ├── PasswordConfig.java     BCrypt（密码哈希算法）编码器
@@ -114,6 +116,7 @@ boot-server/
             │   ├── order/OrderArchitectureTest.java  订单分层与依赖方向约束
             │   ├── order/web/OrderIntegrationTests.java  下单与本人查询 HTTP、原子回滚、并发预扣、幂等重放与越权隔离
             │   ├── order/web/OrderCancellationIntegrationTests.java  本人取消、非法状态、库存释放与事务回滚
+            │   ├── order/web/OrderFulfillmentIntegrationTests.java  后台权限、全量分页与 PAID→SHIPPED→DONE 状态链
             │   ├── payment/domain/PaymentTest.java  支付单金额、状态与标识不变式
             │   ├── payment/PaymentArchitectureTest.java  支付分层与跨上下文协作边界
             │   ├── payment/web/PaymentIntegrationTests.java  真实 HTTP、并发支付、状态门、库存实扣与事务回滚

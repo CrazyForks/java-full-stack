@@ -68,6 +68,14 @@ class BootServerApplicationTests {
 
         assertThat(roleCodes).containsExactly(RoleCodes.ADMIN, RoleCodes.USER);
         assertThat(adminManagePermissionCount).isEqualTo(1);
+        Integer adminOrderPermissionCount = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM t_role role
+                JOIN t_role_permission relation ON relation.role_id = role.id
+                JOIN t_permission permission ON permission.id = relation.permission_id
+                WHERE role.code = '%s' AND permission.code = '%s'
+                """.formatted(RoleCodes.ADMIN, PermissionCodes.ORDER_MANAGEMENT), Integer.class);
+        assertThat(adminOrderPermissionCount).isEqualTo(1);
     }
 
     @Test

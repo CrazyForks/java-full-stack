@@ -44,6 +44,9 @@ public class SecurityConfig {
                         .hasAuthority(PermissionCodes.PRODUCT_MANAGEMENT)
                         // 库存设置与管理查询均不向普通登录用户开放。
                         .requestMatchers("/stocks/**").hasAuthority(PermissionCodes.PRODUCT_MANAGEMENT)
+                        // 后台订单查询与发货只向订单管理员开放，必须先于本人订单规则匹配。
+                        .requestMatchers("/admin/orders", "/admin/orders/**")
+                        .hasAuthority(PermissionCodes.ORDER_MANAGEMENT)
                         .requestMatchers(HttpMethod.GET, "/products", "/products/**").authenticated()
                         // 购物车始终使用 JWT 主体身份；不允许客户端指定或访问其他用户的数据。
                         .requestMatchers("/cart", "/cart/**").authenticated()

@@ -66,11 +66,28 @@ public class MyBatisOrderRepository implements OrderRepository {
     }
 
     @Override
+    public int updateStatusIfCurrent(Long id, OrderStatus current, OrderStatus target) {
+        return orderMapper.update(null, new LambdaUpdateWrapper<OrderEntity>()
+                .eq(OrderEntity::getId, id)
+                .eq(OrderEntity::getStatus, current.name())
+                .set(OrderEntity::getStatus, target.name())
+                .setSql("update_time = CURRENT_TIMESTAMP"));
+    }
+
+    @Override
     public Optional<OrderStatus> getStatusByIdAndUserId(Long id, Long userId) {
         OrderEntity entity = orderMapper.selectOne(new LambdaQueryWrapper<OrderEntity>()
                 .select(OrderEntity::getStatus)
                 .eq(OrderEntity::getId, id)
                 .eq(OrderEntity::getUserId, userId));
+        return Optional.ofNullable(entity).map(OrderEntity::getStatus).map(OrderStatus::valueOf);
+    }
+
+    @Override
+    public Optional<OrderStatus> getStatusById(Long id) {
+        OrderEntity entity = orderMapper.selectOne(new LambdaQueryWrapper<OrderEntity>()
+                .select(OrderEntity::getStatus)
+                .eq(OrderEntity::getId, id));
         return Optional.ofNullable(entity).map(OrderEntity::getStatus).map(OrderStatus::valueOf);
     }
 }

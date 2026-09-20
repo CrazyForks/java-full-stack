@@ -48,4 +48,14 @@ class OrderTest {
         assertThatThrownBy(OrderStatus.PAID::cancel).isInstanceOf(IllegalOrderStateException.class);
         assertThatThrownBy(OrderStatus.CANCELLED::cancel).isInstanceOf(IllegalOrderStateException.class);
     }
+
+    @Test
+    void shippingAndConfirmationFollowPaidShippedDoneSequence() {
+        assertThat(OrderStatus.PAID.ship()).isEqualTo(OrderStatus.SHIPPED);
+        assertThat(OrderStatus.SHIPPED.confirm()).isEqualTo(OrderStatus.DONE);
+        assertThatThrownBy(OrderStatus.CREATED::ship).isInstanceOf(IllegalOrderStateException.class);
+        assertThatThrownBy(OrderStatus.DONE::ship).isInstanceOf(IllegalOrderStateException.class);
+        assertThatThrownBy(OrderStatus.PAID::confirm).isInstanceOf(IllegalOrderStateException.class);
+        assertThatThrownBy(OrderStatus.DONE::confirm).isInstanceOf(IllegalOrderStateException.class);
+    }
 }

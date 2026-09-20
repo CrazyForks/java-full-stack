@@ -24,4 +24,9 @@ public class OrderQueryService {
         return orders.getByIdAndUserId(id, userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "订单不存在"));
     }
+
+    @Transactional(readOnly = true)
+    public AdminOrderPage listAllOrders(long page, long size) {
+        return orders.listAll(page, size);
+    }
 }

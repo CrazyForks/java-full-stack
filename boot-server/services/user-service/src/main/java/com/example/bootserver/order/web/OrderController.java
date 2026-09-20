@@ -5,6 +5,7 @@ import com.example.bootserver.config.OpenApiConfig;
 import com.example.bootserver.order.application.CreatedOrder;
 import com.example.bootserver.order.application.OrderCancellationService;
 import com.example.bootserver.order.application.OrderDetail;
+import com.example.bootserver.order.application.OrderFulfillmentService;
 import com.example.bootserver.order.application.OrderPage;
 import com.example.bootserver.order.application.OrderQueryService;
 import com.example.bootserver.order.application.OrderService;
@@ -31,12 +32,14 @@ public class OrderController {
     private final OrderService orders;
     private final OrderQueryService queries;
     private final OrderCancellationService cancellations;
+    private final OrderFulfillmentService fulfillment;
 
     public OrderController(OrderService orders, OrderQueryService queries,
-                           OrderCancellationService cancellations) {
+                           OrderCancellationService cancellations, OrderFulfillmentService fulfillment) {
         this.orders = orders;
         this.queries = queries;
         this.cancellations = cancellations;
+        this.fulfillment = fulfillment;
     }
 
     @PostMapping
@@ -74,6 +77,13 @@ public class OrderController {
     @Operation(summary = "取消本人订单", description = "仅 CREATED 订单可取消，并在同一事务释放全部预扣库存。")
     public Result<Void> cancelOrder(@AuthenticationPrincipal Long userId, @PathVariable Long id) {
         cancellations.cancel(userId, id);
+        return Result.ok();
+    }
+
+    @PostMapping("/{id}/confirm")
+    @Operation(summary = "确认收货", description = "订单所有者只能把 SHIPPED 订单确认为 DONE。")
+    public Result<Void> confirmOrder(@AuthenticationPrincipal Long userId, @PathVariable Long id) {
+        fulfillment.confirm(userId, id);
         return Result.ok();
     }
 }

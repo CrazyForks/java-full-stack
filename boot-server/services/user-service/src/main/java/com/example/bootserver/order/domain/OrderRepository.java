@@ -10,5 +10,9 @@ public interface OrderRepository {
 
     int updateStatusIfCurrent(Long id, Long userId, OrderStatus current, OrderStatus target);
 
+    int updateStatusIfCurrent(Long id, OrderStatus current, OrderStatus target);
+
     Optional<OrderStatus> getStatusByIdAndUserId(Long id, Long userId);
+
+    Optional<OrderStatus> getStatusById(Long id);
 }

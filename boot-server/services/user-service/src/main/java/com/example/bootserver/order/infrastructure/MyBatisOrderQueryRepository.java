@@ -3,6 +3,8 @@ package com.example.bootserver.order.infrastructure;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.example.bootserver.order.application.OrderDetail;
+import com.example.bootserver.order.application.AdminOrderPage;
+import com.example.bootserver.order.application.AdminOrderSummary;
 import com.example.bootserver.order.application.OrderItemView;
 import com.example.bootserver.order.application.OrderPage;
 import com.example.bootserver.order.application.OrderQueryRepository;
@@ -54,5 +56,18 @@ public class MyBatisOrderQueryRepository implements OrderQueryRepository {
                 .toList();
         return Optional.of(new OrderDetail(order.getId(), order.getOrderNo(),
                 OrderStatus.valueOf(order.getStatus()), order.getTotalAmount(), order.getCreateTime(), items));
+    }
+
+    @Override
+    public AdminOrderPage listAll(long page, long size) {
+        Page<OrderEntity> result = orderMapper.selectPage(new Page<>(page, size),
+                new LambdaQueryWrapper<OrderEntity>()
+                        .orderByDesc(OrderEntity::getCreateTime)
+                        .orderByDesc(OrderEntity::getId));
+        List<AdminOrderSummary> items = result.getRecords().stream()
+                .map(order -> new AdminOrderSummary(order.getId(), order.getOrderNo(), order.getUserId(),
+                        OrderStatus.valueOf(order.getStatus()), order.getTotalAmount(), order.getCreateTime()))
+                .toList();
+        return new AdminOrderPage(result.getCurrent(), result.getSize(), result.getTotal(), items);
     }
 }
